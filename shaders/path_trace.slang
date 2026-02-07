@@ -3,11 +3,38 @@ static const float tau = 2.0 * float.getPi();
 
 static const int max_depth = 8;
 
-RaytracingAccelerationStructure tlas;
-RWTexture2D<float4> render_texture;
+const uint sample_seed;
+RWTexture2D<float4> sample_texture;
 
-Texture2D<float3> environment_map;
-SamplerState environment_sampler;
+struct PerspectiveCamera {
+    float3 forward;
+    float3 horizontal;
+    float3 vertical;
+    float3 position;
+
+    Ray getRay(float2 uv) {
+        return Ray(
+            position,
+            normalize(forward + (2.0 * uv.x - 1.0) * horizontal + (1.0 - 2.0 * uv.y) * vertical),
+        );
+    }
+
+}
+
+struct Scene {
+    RaytracingAccelerationStructure tlas;
+    Texture2D<float3> environment_map;
+    SamplerState environment_sampler;
+
+    PerspectiveCamera camera;
+}
+
+ParameterBlock<Scene> scene;
+
+struct Ray {
+    float3 origin;
+    float3 direction;
+}
 
 struct Path {
     float3 position;
@@ -29,19 +56,23 @@ struct Path {
 }
 
 [shader("miss")]
-func miss(inout Path path)
+void miss(inout Path path)
 {
     float phi = atan2(path.direction.z, path.direction.x) + pi;
     float theta = acos(path.direction.y);
 
     float2 uv = float2(phi / tau, theta / pi);
 
-    path.radiance += path.throughput * environment_map.Sample(environment_sampler, uv);
+    path.radiance += path.throughput * scene.environment_map.Sample(scene.environment_sampler, uv);
     path.terminate();
 }
 
+[shader("miss")]
+void miss_occlusion()
+{}
+
 [shader("closesthit")]
-func closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAttributes attribs)
+void closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAttributes attribs)
 {
     int geometry_index = GeometryIndex();
     uint primitive_index = PrimitiveIndex();
@@ -53,30 +84,35 @@ func closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAt
     float3 p = path.position + t * path.direction;
 
     float3 wo = -path.direction;
-    float3 wi = -sample_cosine_hemisphere(path.rand_state);
+    float3 wi = sample_cosine_hemisphere(path.rand_state);
 
     path.position = p;
     path.direction = wi;
 }
 
+[shader("anyhit")]
+void any_hit_triangle_occlusion(inout bool occluded) {
+    occluded = true;
+}
+
 [shader("raygeneration")]
-func ray_gen()
+void ray_gen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 dim = DispatchRaysDimensions().xy;
+
+    uint tid = pixel.y * dim.x + pixel.x;
 
     float2 uv = (float2(pixel) + 0.5) / float2(dim);
 
     Path path = {};
 
-    path.rand_state = tea(0, pixel.y * dim.x + pixel.x);
+    path.rand_state = tea(sample_seed, tid);
 
-    path.position = float3(0.0, 0.0, 3.0);
-    path.direction = normalize(float3(
-        2.0 * uv.x - 1.0,
-        1.0 - 2.0 * uv.y,
-        -1.0,
-    ));
+    Ray camera_ray = scene.camera.getRay(uv);
+
+    path.position = camera_ray.origin;
+    path.direction = camera_ray.direction;
 
     path.radiance = float3(0.0);
     path.throughput = float3(1.0);
@@ -94,7 +130,7 @@ func ray_gen()
         ray.TMax = 1e10;
 
         TraceRay(
-            tlas,
+            scene.tlas,
             0,
             0xff,
             0 /* RayContributionToHitGroupIndex */,
@@ -106,7 +142,7 @@ func ray_gen()
     }
 
 
-    render_texture[pixel] = float4(path.radiance, 1.f);
+    sample_texture[pixel] = float4(path.radiance, 1.f);
 }
 
 // PRNG xorshift seed generator by NVIDIA
