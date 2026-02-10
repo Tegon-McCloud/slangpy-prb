@@ -6,6 +6,22 @@ static const int max_depth = 8;
 const uint sample_seed;
 RWTexture2D<float4> sample_texture;
 
+struct MeshDesc {
+    uint vertex_offset;
+    uint index_offset;
+}
+
+struct MaterialDesc {
+    uint evaluate_call_index;
+    uint sample_call_index;
+    Ptr<void, Access.Read, AddressSpace.Device> parameters;
+}
+
+struct InstanceDesc {
+    uint mesh_index;
+    uint material_index;
+}
+
 struct PerspectiveCamera {
     float3 forward;
     float3 horizontal;
@@ -27,6 +43,15 @@ struct Scene {
     SamplerState environment_sampler;
 
     PerspectiveCamera camera;
+
+    StructuredBuffer<float3> vertices;
+    StructuredBuffer<uint> indices;
+    StructuredBuffer<MeshDesc> mesh_descs;
+
+    // StructuredBuffer<uint8_t> material_parameters;
+    StructuredBuffer<MaterialDesc> material_descs;
+    
+    StructuredBuffer<InstanceDesc> instance_descs;
 }
 
 ParameterBlock<Scene> scene;
@@ -55,8 +80,39 @@ struct Path {
     }
 }
 
+struct BrdfEvaluation {
+    /*
+        `parameters` pointer is reinterpret cast to a `uint64_t`, since
+        pipeline creation fails when a pointer is passed to a callable
+        shader.
+    */ 
+    uint64_t parameters; 
+    float3 wi;
+    uint rand_state;
+    float3 wo;
+    float3 value;
+}
+
+struct LambertianParameters {
+    float3 color;
+}
+
+[shader("callable")]
+void call_evaluate_lambertian(inout BrdfEvaluation e) {
+
+    LambertianParameters parameters = *reinterpret<LambertianParameters *>(e.parameters);
+    e.value = e.wi.z * parameters.color / pi;
+}
+
+[shader("callable")]
+void call_sample_lambertian(inout BrdfEvaluation e) {
+
+    LambertianParameters parameters = *reinterpret<LambertianParameters *>(e.parameters);
+    e.value = e.wi.z * parameters.color / pi;
+}
+
 [shader("miss")]
-void miss(inout Path path)
+void miss_primary(inout Path path)
 {
     float phi = atan2(path.direction.z, path.direction.x) + pi;
     float theta = acos(path.direction.y);
@@ -74,20 +130,58 @@ void miss_occlusion()
 [shader("closesthit")]
 void closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAttributes attribs)
 {
-    int geometry_index = GeometryIndex();
+    uint instance_index = InstanceIndex();
+    InstanceDesc instance_desc = scene.instance_descs[instance_index];
+    MeshDesc mesh_desc = scene.mesh_descs[instance_desc.mesh_index];
+    MaterialDesc material_desc = scene.material_descs[instance_desc.material_index];
+
     uint primitive_index = PrimitiveIndex();
 
-    path.throughput *= float3(attribs.barycentrics, 0);
-    path.depth += 1;
+    uint i0 = scene.indices[mesh_desc.index_offset + primitive_index * 3 + 0];
+    uint i1 = scene.indices[mesh_desc.index_offset + primitive_index * 3 + 1];
+    uint i2 = scene.indices[mesh_desc.index_offset + primitive_index * 3 + 2];
+
+    float3 v0 = scene.vertices[i0];
+    float3 v1 = scene.vertices[i1];
+    float3 v2 = scene.vertices[i2];
+
+    float3 barycentrics = float3(1.0 - attribs.barycentrics.x - attribs.barycentrics.y, attribs.barycentrics.x, attribs.barycentrics.y);
+
+    float3 e1 = v1 - v0;
+    float3 e2 = v2 - v0;
+
+    float3 n_object = cross(e1, e2);
 
     float t = RayTCurrent();
     float3 p = path.position + t * path.direction;
 
-    float3 wo = -path.direction;
+    float3 n = mul(ObjectToWorld(), float4(n_object, 0.0));
+
+    if (dot(n, path.direction) > 0.0) {
+        n = -n;
+    }
+
+    float3x3 tangent_to_world = make_tbn_matrix(n);
+    float3x3 world_to_tangent = transpose(tangent_to_world);
+
+    float3 wo = mul(world_to_tangent, -path.direction);
     float3 wi = sample_cosine_hemisphere(path.rand_state);
+    float pdf_inv = pi / wi.z;
+
+    BrdfEvaluation evaluation;
+    evaluation.parameters = reinterpret<uint64_t>(material_desc.parameters);
+    evaluation.rand_state = path.rand_state;
+    evaluation.wi = wi;
+    evaluation.wo = wo;
+
+    CallShader(material_desc.evaluate_call_index, evaluation);
+
+    path.rand_state = evaluation.rand_state;
+    path.throughput *= evaluation.value * pdf_inv;
+    path.depth += 1;
 
     path.position = p;
-    path.direction = wi;
+    path.direction = mul(tangent_to_world, wi);
 }
 
 [shader("anyhit")]
@@ -133,16 +227,27 @@ void ray_gen()
             scene.tlas,
             0,
             0xff,
-            0 /* RayContributionToHitGroupIndex */,
-            0 /* MultiplierForGeometryContributionHitGroupIndex */,
-            0 /* MissShaderIndex */,
+            0, /* RayContributionToHitGroupIndex */
+            0, /* MultiplierForGeometryContributionHitGroupIndex */
+            0, /* MissShaderIndex */
             ray,
             path,
         );
     }
 
+    sample_texture[pixel] = float4(path.radiance, 1.0);
+}
 
-    sample_texture[pixel] = float4(path.radiance, 1.f);
+float3x3 make_tbn_matrix(float3 normal) {
+    float signbit = sign(normal.z + 1.0e-16f);
+    float a = -1.0f / (1.0f + abs(normal.z));
+    float b = normal.x * normal.y * a;
+
+    return transpose(float3x3(
+        float3(1.0f + normal.x * normal.x * a, b, -signbit * normal.x),
+        float3(signbit * b, signbit * (1.0f + normal.y * normal.y * a), -normal.y),
+        normal,
+    ));
 }
 
 // PRNG xorshift seed generator by NVIDIA

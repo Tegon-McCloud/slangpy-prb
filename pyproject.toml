@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pillow>=12.1.0",
+    "pygltflib>=1.16.5",
     "ruff>=0.14.14",
     "slangpy>=0.40.1",
     "tqdm>=4.67.3",

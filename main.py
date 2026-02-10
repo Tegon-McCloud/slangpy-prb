@@ -7,7 +7,9 @@ from tqdm import tqdm
 import random
 
 import pathlib
+import struct
 from dataclasses import dataclass
+
 
 class Transform:
     def __init__(self):
@@ -128,14 +130,51 @@ class Mesh:
 
         return Mesh(vertices=vertices, indices=indices)
 
+class Material:
+
+    def __init__(
+        self,
+        evaluate_entry_point: str,
+        sample_entry_point: str,
+    ):
+        super().__init__()
+
+        self.evaluate_entry_point = evaluate_entry_point
+        self.sample_entry_point = sample_entry_point
+
+    def pack_parameters(self) -> bytes: ...
+
+class LambertianMaterial(Material):
+
+    def __init__(
+        self,
+        color: spy.float3,
+    ):
+        super().__init__(
+            evaluate_entry_point="call_evaluate_lambertian",
+            sample_entry_point="call_sample_lambertian",
+        )
+
+        self.color = color
+
+    def pack_parameters(self) -> bytes:
+        return struct.pack(
+            "fff",
+            self.color.x,
+            self.color.y,
+            self.color.z,
+        )
+
 class Instance:
     def __init__(
         self,
         mesh_id: int,
+        material_id: int,
         transform: Transform,
     ):
         super().__init__()
         self.mesh_id = mesh_id
+        self.material_id = material_id
         self.transform = transform
 
 class Stage:
@@ -146,6 +185,7 @@ class Stage:
     ):
         super().__init__()
         self.meshes: list[Mesh] = []
+        self.materials: list[Material] = []
         self.instances: list[Instance] = []
         self.camera = camera
         self.environment = environment
@@ -155,43 +195,73 @@ class Stage:
         self.meshes.append(mesh)
         return mesh_id
 
+    def add_material(self, material: Material) -> int:
+        material_id = len(self.materials)
+        self.materials.append(material)
+        return material_id
+
     def add_instance(self, instance: Instance) -> int:
         instance_id = len(self.instances)
         self.instances.append(instance)
         return instance_id
 
-class Scene:
+class ShaderTableBuilder:
+
+    def __init__(
+        self,
+    ):
+        super().__init__()
+
+        self.callable_entries: list[str] = []
+
+    def add_callable(self, entry_point_name: str) -> int:
+        index = len(self.callable_entries)
+        self.callable_entries.append(entry_point_name)
+        return index
+
+
+class SceneMeshList:
     @dataclass
     class MeshDesc:
-        vertex_count: int
-        index_count: int
         vertex_offset: int
+        vertex_count: int
         index_offset: int
+        index_count: int
+
+        def pack(self) -> bytes:
+            return struct.pack(
+                "II",
+                self.vertex_offset,
+                self.index_offset,
+            )
 
     def __init__(
         self,
         device: spy.Device,
-        stage: Stage,
+        meshes: list[Mesh]        
     ):
         super().__init__()
+        
         self.device = device
 
-        mesh_descs: list[Scene.MeshDesc] = []
+        self.mesh_descs: list[SceneMeshList.MeshDesc] = []
         vertex_count = 0
         index_count = 0
-        for mesh in stage.meshes:
-            mesh_descs.append(Scene.MeshDesc(
-                vertex_count=mesh.vertex_count,
-                index_count=mesh.index_count,
+        for mesh in meshes:
+            self.mesh_descs.append(SceneMeshList.MeshDesc(
                 vertex_offset=vertex_count,
+                vertex_count=mesh.vertex_count,
                 index_offset=index_count,
+                index_count=mesh.index_count,
             ))
             vertex_count += mesh.vertex_count
             index_count += mesh.index_count
         
-        vertices = np.concatenate([mesh.vertices for mesh in stage.meshes], axis=0)
-        indices = np.concatenate([mesh.indices for mesh in stage.meshes], axis=0)
+        vertices = np.concatenate([mesh.vertices for mesh in meshes], axis=0)
+        indices = np.concatenate([mesh.indices for mesh in meshes], axis=0)
 
+        mesh_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.mesh_descs), dtype=np.uint8).flatten()
+        
         self.vertex_buffer = self.device.create_buffer(
             usage=spy.BufferUsage.shader_resource,
             label="vertex_buffer",
@@ -202,16 +272,21 @@ class Scene:
             label="index_buffer",
             data=indices,
         )
+        self.mesh_desc_buffer = self.device.create_buffer(
+            usage=spy.BufferUsage.shader_resource,
+            label="mesh_desc_buffer",
+            data=mesh_descs_bytes,
+        )
 
         self.blases: list[spy.AccelerationStructure] = []
 
         command_encoder = self.device.create_command_encoder()
-        for mesh_desc in mesh_descs:
+        for mesh_desc in self.mesh_descs:
             blas_input_triangles = spy.AccelerationStructureBuildInputTriangles({
                 "vertex_buffers": [self.vertex_buffer],
                 "vertex_format": spy.Format.rgb32_float,
                 "vertex_count": mesh_desc.vertex_count,
-                "vertex_stride": vertices.itemsize * 3,
+                "vertex_stride": 4 * 3,
                 "index_buffer": self.index_buffer,
                 "index_format": spy.IndexFormat.uint32,
                 "index_count": mesh_desc.index_count,
@@ -243,7 +318,109 @@ class Scene:
                 scratch_buffer=blas_scratch_buffer,
             )
 
-        self.device.submit_command_buffer(command_encoder.finish())
+        device.submit_command_buffer(command_encoder.finish())
+
+
+
+class SceneMaterialList:
+    @dataclass
+    class MaterialDesc:
+        evaluate_call_index: int
+        sample_call_index: int
+        parameter_address: int
+
+        def pack(self) -> bytes:
+            return struct.pack(
+                "IIQ",
+                self.evaluate_call_index,
+                self.sample_call_index,
+                self.parameter_address,
+            )
+
+    def __init__(
+        self,
+        device: spy.Device,
+        materials: list[Material],
+        shader_table_builder: ShaderTableBuilder
+    ):
+        self.device = device
+        
+        parameter_bytes = bytearray()
+        parameter_offsets: list[int] = []
+        parameter_size = 0
+
+        for material in materials:
+            bytes = material.pack_parameters()
+
+            parameter_offsets.append(parameter_size)
+            parameter_bytes.extend(bytes)
+            parameter_size += len(parameter_bytes)
+
+        parameter_bytes = np.frombuffer(parameter_bytes, dtype=np.uint8).flatten()
+        
+        self.parameter_buffer = self.device.create_buffer(
+            usage=spy.BufferUsage.shader_resource,
+            label="parameter_buffer",
+            data=parameter_bytes,
+        )
+        
+        self.material_descs: list[SceneMaterialList.MaterialDesc] = []
+
+        for material, parameter_offset in zip(materials, parameter_offsets):
+            evaluate_call_index = shader_table_builder.add_callable(material.evaluate_entry_point)
+            sample_call_index = shader_table_builder.add_callable(material.sample_entry_point)
+
+            self.material_descs.append(SceneMaterialList.MaterialDesc(
+                evaluate_call_index=evaluate_call_index,
+                sample_call_index=sample_call_index,
+                parameter_address=self.parameter_buffer.device_address + parameter_offset,
+            ))
+        
+        material_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.material_descs), dtype=np.uint8).flatten()
+
+        self.material_descs_buffer = device.create_buffer(
+            usage=spy.BufferUsage.shader_resource,
+            label="material_descs_buffer",
+            data=material_descs_bytes,
+        )
+
+class Scene:
+    @dataclass
+    class InstanceDesc:
+        mesh_index: int
+        material_index: int
+
+        def pack(self) -> bytes:
+            return struct.pack(
+                "II",
+                self.mesh_index,
+                self.material_index
+            )
+
+    def __init__(
+        self,
+        device: spy.Device,
+        stage: Stage,
+        shader_table_builder: ShaderTableBuilder,
+    ):
+        super().__init__()
+        self.device = device
+
+        self.meshes = SceneMeshList(self.device, stage.meshes)
+        self.materials = SceneMaterialList(self.device, stage.materials, shader_table_builder)
+
+        self.instance_descs = [Scene.InstanceDesc(
+            mesh_index=instance.mesh_id,
+            material_index=instance.material_id,
+        ) for instance in stage.instances]
+
+        instance_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.instance_descs), dtype=np.uint8).flatten()
+
+        self.instance_descs_buffer = device.create_buffer(
+            usage=spy.BufferUsage.shader_resource,
+            label="instance_descs_buffer",
+            data=instance_descs_bytes,
+        )
 
         instance_list = device.create_acceleration_structure_instance_list(size=len(stage.instances))
 
@@ -256,7 +433,7 @@ class Scene:
                     "instance_mask": 0xff,
                     "instance_contribution_to_hit_group_index": 0,
                     "flags": spy.AccelerationStructureInstanceFlags.none,
-                    "acceleration_structure": self.blases[instance.mesh_id].handle,
+                    "acceleration_structure": self.meshes.blases[instance.mesh_id].handle,
                 },
             )
 
@@ -291,77 +468,27 @@ class Scene:
 
         self.camera = stage.camera
 
+
     def bind(self, cursor: spy.ShaderCursor):
         cursor.tlas = self.tlas
         cursor.environment_map = self.environment_texture
+
+        cursor.vertices = self.meshes.vertex_buffer
+        cursor.indices = self.meshes.index_buffer
+        cursor.mesh_descs = self.meshes.mesh_desc_buffer
+
+        cursor.material_descs = self.materials.material_descs_buffer
+
+        cursor.instance_descs = self.instance_descs_buffer
+
         self.camera.bind(cursor.camera)
-
-# @dataclass
-# class HitGroupDesc:
-#     any_hit_entry_point: str | None = None,
-#     closest_hit_entry_point: str | None = None,
-
-# class ShaderTableDesc:
-
-#     def __init__(self):
-#         super().__init__()
-
-#         self.hit_groups: dict[str, HitGroupDesc] = {}
-
-#         self.ray_gen_entries: list[str] = []
-#         self.miss_entries: list[str] = []
-#         self.hit_group_entries: list[str] = []
-#         self.callable_entries: list[str] = []
-
-#     def add_ray_gen(self, entry_point: str) -> int:
-#         index = len(self.ray_gen_entries)
-#         self.ray_gen_entries.append(entry_point)
-#         return index
-
-#     def add_miss(self, entry_point: str) -> int:
-#         index = len(self.miss_entries)
-#         self.miss_entries.append(entry_point)
-#         return index
-    
-#     def add_hit_group(
-#             self,
-#             hit_group_name: str,
-#             hit_group: HitGroupDesc,
-#         ) -> int:
-
-#         self.hit_groups[hit_group_name] = hit_group 
-        
-#         index = len(self.hit_group_entries)
-#         self.hit_group_entries.append(hit_group_name)
-#         return index
-
-#     def add_callable(self, entry_point: str) -> int:
-#         index = len(self.callable_entries)
-#         self.callable_entries.append(entry_point)
-#         return index
-
-#     def hit_group_descs(self) -> list[spy.HitGroupDesc]:
-
-
-#     def all_entry_points(self) -> list[str]:
-#         entry_points: set[str] = set()
-
-#         entry_points.union(self.ray_gen_entries)
-#         entry_points.union(self.miss_entries)
-#         entry_points.union(self.callable_entries)
-
-#         for hit_group in self.hit_groups:
-            
-        
-
-
-
 
 
 class PathTracer:
     def __init__(
         self,
         device: spy.Device,
+        shader_table_builder: ShaderTableBuilder,
         width: int,
         height: int,
     ):
@@ -377,7 +504,15 @@ class PathTracer:
             label="sample_texture",
         )
 
-        program = device.load_program("path_trace.slang", ["ray_gen", "miss", "closest_hit_triangle_primary", "any_hit_triangle_occlusion"])
+        entry_point_names = [
+            "ray_gen",
+            "miss_primary",
+            "closest_hit_triangle_primary",
+            "any_hit_triangle_occlusion",
+        ]
+        entry_point_names.extend(set(shader_table_builder.callable_entries))
+
+        program = device.load_program("path_trace.slang", entry_point_names)
 
         self.pipeline = device.create_ray_tracing_pipeline(
             program=program,
@@ -388,18 +523,21 @@ class PathTracer:
             max_recursion=2,
             max_ray_payload_size=64,
         )
+
         self.shader_table = device.create_shader_table(
             program=program,
             ray_gen_entry_points=["ray_gen"],
-            miss_entry_points=["miss", "miss_occlusion"],
+            miss_entry_points=["miss_primary", "miss_occlusion"],
             hit_group_names=["triangle_primary", "triangle_occlusion"],
-            callable_entry_points=[]
+            callable_entry_points=shader_table_builder.callable_entries
         )
+
+
 
     def execute(
         self,
         command_encoder: spy.CommandEncoder,
-        scene: Scene
+        scene: Scene,
     ):
         with command_encoder.begin_ray_tracing_pass() as pass_encoder:
             shader_object = pass_encoder.bind_pipeline(self.pipeline, self.shader_table)
@@ -461,17 +599,23 @@ def main():
         camera=PerspectiveCamera(camera_transform, np.pi / 2.0, 1.0),
         environment=spy.Bitmap.load_from_file("./assets/kloppenheim_06_puresky_4k.hdr"),
     )
-    mesh_id = stage.add_mesh(Mesh.quad())
+    quad_id = stage.add_mesh(Mesh.quad())
+
+    material_id = stage.add_material(LambertianMaterial(color=spy.float3(1.0, 1.0, 0.0)))
+    material_id_2 = stage.add_material(LambertianMaterial(color=spy.float3(1.0, 0.0, 0.0)))
 
     instance_transform = Transform.identity()
     instance_transform.rotate_x(np.pi / 2.0)
     
-    stage.add_instance(Instance(mesh_id, instance_transform))
-        
-    scene = Scene(device, stage)
+    stage.add_instance(Instance(quad_id, material_id_2, instance_transform))
+    stage.add_instance(Instance(quad_id, material_id, Transform.identity()))
 
-    path_tracer = PathTracer(device, 1024, 1024)
-    accumulator = Accumulator(device, 1024, 1024)
+    shader_table_builder = ShaderTableBuilder()
+
+    scene = Scene(device, stage, shader_table_builder)
+
+    path_tracer = PathTracer(device, shader_table_builder, width=1024, height=1024)
+    accumulator = Accumulator(device, width=1024, height=1024)
     
     random.seed(1234)
 
@@ -482,8 +626,7 @@ def main():
         accumulator.execute(command_encoder, path_tracer.sample_texture)
         
         device.submit_command_buffer(command_encoder.finish())
-        
-
+    
     result = accumulator.accumulation.to_numpy()
     result = result / result[:,:,3:4]
     result = np.clip(result, 0.0, 1.0)
