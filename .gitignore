@@ -12,5 +12,8 @@ wheels/
 # Ruff cache
 .ruff_cache/
 
+# Editor configurations
+.vscode/
+
 # Program output
 output/

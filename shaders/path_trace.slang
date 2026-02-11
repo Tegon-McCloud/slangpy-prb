@@ -1,5 +1,6 @@
-static const float pi = float.getPi();
-static const float tau = 2.0 * float.getPi();
+import util;
+import random;
+import bsdf;
 
 static const int max_depth = 8;
 
@@ -68,7 +69,7 @@ struct Path {
 
     float3 radiance;
     float3 throughput;
-    int depth;
+    int depth = 0;
 
     [mutating]
     void terminate() {
@@ -80,36 +81,7 @@ struct Path {
     }
 }
 
-struct BrdfEvaluation {
-    /*
-        `parameters` pointer is reinterpret cast to a `uint64_t`, since
-        pipeline creation fails when a pointer is passed to a callable
-        shader.
-    */ 
-    uint64_t parameters; 
-    float3 wi;
-    uint rand_state;
-    float3 wo;
-    float3 value;
-}
 
-struct LambertianParameters {
-    float3 color;
-}
-
-[shader("callable")]
-void call_evaluate_lambertian(inout BrdfEvaluation e) {
-
-    LambertianParameters parameters = *reinterpret<LambertianParameters *>(e.parameters);
-    e.value = e.wi.z * parameters.color / pi;
-}
-
-[shader("callable")]
-void call_sample_lambertian(inout BrdfEvaluation e) {
-
-    LambertianParameters parameters = *reinterpret<LambertianParameters *>(e.parameters);
-    e.value = e.wi.z * parameters.color / pi;
-}
 
 [shader("miss")]
 void miss_primary(inout Path path)
@@ -169,7 +141,7 @@ void closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAt
     float pdf_inv = pi / wi.z;
 
     BrdfEvaluation evaluation;
-    evaluation.parameters = reinterpret<uint64_t>(material_desc.parameters);
+    evaluation.set_parameter_ptr(material_desc.parameters);
     evaluation.rand_state = path.rand_state;
     evaluation.wi = wi;
     evaluation.wo = wo;
@@ -201,13 +173,12 @@ void ray_gen()
 
     Path path = {};
 
-    path.rand_state = tea(sample_seed, tid);
+    path.rand_state = combine_seeds(sample_seed, tid);
 
     Ray camera_ray = scene.camera.getRay(uv);
 
     path.position = camera_ray.origin;
     path.direction = camera_ray.direction;
-
     path.radiance = float3(0.0);
     path.throughput = float3(1.0);
 
@@ -250,40 +221,3 @@ float3x3 make_tbn_matrix(float3 normal) {
     ));
 }
 
-// PRNG xorshift seed generator by NVIDIA
-uint tea(uint v0, uint v1)
-{
-    const uint N = 16u; // User specified number of iterations
-    uint s0 = 0u;
-    for (uint n = 0u; n < N; n++) {
-        s0 += 0x9e3779b9u;
-        v0 += ((v1 << 4u) + 0xa341316cu) ^ (v1 + s0) ^ ((v1 >> 5u) + 0xc8013ea4u);
-        v1 += ((v0 << 4u) + 0xad90777du) ^ (v0 + s0) ^ ((v0 >> 5u) + 0x7e95761eu);
-    }
-
-    return v0;
-}
-
-// Generate random unsigned int in [0, 2^31-1)
-void mcg31(inout uint rand_state) {
-    static const uint LCG_A = 1977654935u; // Multiplier from Hui-Ching Tang [EJOR 2007]
-    rand_state = (LCG_A * rand_state) & 0x7FFFFFFEu;
-}
-
-// Generate random float in [0, 1)
-float rnd(inout uint rand_state) {
-    mcg31(rand_state);
-    return float(rand_state) / float(0x80000000u);
-}
-
-float3 sample_cosine_hemisphere(inout uint rand_state) {
-    float cos_theta = sqrt(rnd(rand_state));
-    float sin_theta = sqrt(1.0 - cos_theta * cos_theta);
-    float phi = 2.0 * pi * rnd(rand_state);
-
-    return float3(
-        sin_theta * cos(phi),
-        sin_theta * sin(phi),
-        cos_theta
-    );
-}
