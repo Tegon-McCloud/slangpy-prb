@@ -5,7 +5,7 @@ struct LambertianParameters {
 }
 
 [shader("callable")]
-void call_evaluate_lambertian(inout BrdfEvaluation e)
+void call_evaluate_lambertian(inout BsdfEvaluation e)
 {
     LambertianParameters parameters = e.get_parameters<LambertianParameters>();
 
@@ -14,14 +14,21 @@ void call_evaluate_lambertian(inout BrdfEvaluation e)
         return;
     }
     
-    e.value = abs(e.wi.z) * parameters.color / pi;
+    e.value = parameters.color / pi;
 }
 
 [shader("callable")]
-void call_sample_lambertian(inout BrdfEvaluation e)
+void call_sample_lambertian(inout BsdfSample s)
 {
-    LambertianParameters parameters = e.get_parameters<LambertianParameters>();
+    LambertianParameters parameters = s.get_parameters<LambertianParameters>();
 
-    
+    s.wi = sample_cosine_hemisphere(s.rand_state);
+    float cos_theta = s.wi.z;
 
+    if (dot(s.wi, s.wo) < 0.0) {
+        s.wi = -s.wi;
+    }
+
+    s.value = parameters.color / pi;
+    s.pdf = cos_theta / pi;
 }

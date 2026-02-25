@@ -49,7 +49,6 @@ struct Scene {
     StructuredBuffer<uint> indices;
     StructuredBuffer<MeshDesc> mesh_descs;
 
-    // StructuredBuffer<uint8_t> material_parameters;
     StructuredBuffer<MaterialDesc> material_descs;
     
     StructuredBuffer<InstanceDesc> instance_descs;
@@ -135,21 +134,20 @@ void closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAt
 
     float3x3 tangent_to_world = make_tbn_matrix(n);
     float3x3 world_to_tangent = transpose(tangent_to_world);
-
+    
     float3 wo = mul(world_to_tangent, -path.direction);
-    float3 wi = sample_cosine_hemisphere(path.rand_state);
-    float pdf_inv = pi / wi.z;
+    
+    BsdfSample bsdf_sample;
+    bsdf_sample.set_parameter_ptr(material_desc.parameters);
+    bsdf_sample.wo = wo;
+    bsdf_sample.rand_state = path.rand_state;
 
-    BrdfEvaluation evaluation;
-    evaluation.set_parameter_ptr(material_desc.parameters);
-    evaluation.rand_state = path.rand_state;
-    evaluation.wi = wi;
-    evaluation.wo = wo;
+    CallShader(material_desc.sample_call_index, bsdf_sample);
 
-    CallShader(material_desc.evaluate_call_index, evaluation);
+    float3 wi = bsdf_sample.wi;
 
-    path.rand_state = evaluation.rand_state;
-    path.throughput *= evaluation.value * pdf_inv;
+    path.rand_state = bsdf_sample.rand_state;
+    path.throughput *= bsdf_sample.value / bsdf_sample.pdf;
     path.depth += 1;
 
     path.position = p;
@@ -169,12 +167,12 @@ void ray_gen()
 
     uint tid = pixel.y * dim.x + pixel.x;
 
-    float2 uv = (float2(pixel) + 0.5) / float2(dim);
-
+    
     Path path = {};
-
+    
     path.rand_state = combine_seeds(sample_seed, tid);
-
+    
+    float2 uv = (float2(pixel) + float2(rnd(path.rand_state), rnd(path.rand_state))) / float2(dim);
     Ray camera_ray = scene.camera.getRay(uv);
 
     path.position = camera_ray.origin;
@@ -207,6 +205,12 @@ void ray_gen()
     }
 
     sample_texture[pixel] = float4(path.radiance, 1.0);
+}
+
+[shader("raygen")]
+void ray_gen_adjoint() {
+    
+
 }
 
 float3x3 make_tbn_matrix(float3 normal) {

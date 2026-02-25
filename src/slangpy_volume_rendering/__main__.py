@@ -84,7 +84,7 @@ class PathTracer:
             cursor.sample_texture = self.sample_texture
             scene.bind(cursor.scene)
 
-            pass_encoder.dispatch_rays(0, [1024, 1024, 1])
+            pass_encoder.dispatch_rays(0, [self.sample_texture.width, self.sample_texture.height, 1])
 
 
 class Accumulator:
@@ -97,8 +97,11 @@ class Accumulator:
     ):
         super().__init__()
         self.device = device
-        self.program = self.device.load_program("accumulate.slang", ["main"])
-        self.kernel = self.device.create_compute_kernel(self.program)
+        self.accumulate_program = self.device.load_program("accumulate.slang", ["accumulate"])
+        self.normalize_program = self.device.load_program("normalize.slang", ["normalize"])
+
+        self.accumulate_kernel = self.device.create_compute_kernel(self.accumulate_program)
+        self.normalize_kernel = self.device.create_compute_kernel(self.normalize_program)
         self.accumulation = self.device.create_texture(
             format=spy.Format.rgba32_float,
             width=width,
@@ -107,12 +110,12 @@ class Accumulator:
             label="accumulation",
         )
 
-    def execute(
+    def accumulate(
         self,
         command_encoder: spy.CommandEncoder,
         sample: spy.Texture,
     ):
-        self.kernel.dispatch(
+        self.accumulate_kernel.dispatch(
             thread_count=[self.accumulation.width, self.accumulation.height, 1],
             vars={
                 "accumulator": {
@@ -123,14 +126,62 @@ class Accumulator:
             command_encoder=command_encoder,
         )
 
+    def normalize(
+        self,
+        command_encoder: spy.CommandEncoder,
+    ):
+        self.normalize_kernel.dispatch(
+            thread_count=[self.accumulation.width, self.accumulation.height, 1],
+            vars={
+                "accumulator": {
+                    "accumulation": self.accumulation,
+                },
+            },
+            command_encoder=command_encoder,
+        )
 
 
+
+def render(device: spy.Device, stage: Stage, width: int, height: int, sample_count: int, seed: int) -> spy.Texture:
+
+    shader_table_builder = ShaderTableBuilder()
+
+    scene = Scene(device, stage, shader_table_builder)
+
+    path_tracer = PathTracer(device, shader_table_builder, width, height)
+    accumulator = Accumulator(device, width, height)
+    
+    random.seed(seed)
+
+    for _ in tqdm(range(sample_count)):
+        command_encoder = device.create_command_encoder()
+
+        path_tracer.execute(command_encoder, scene)
+        accumulator.accumulate(command_encoder, path_tracer.sample_texture)
+        
+        device.submit_command_buffer(command_encoder.finish())
+
+    command_encoder = device.create_command_encoder()
+    accumulator.normalize(command_encoder)
+    device.submit_command_buffer(command_encoder.finish())
+
+    return accumulator.accumulation
+
+def save_texture(texture: spy.Texture, filename: str, scale: float = 1.0):
+    img = texture.to_numpy()
+    img = scale * img
+    print(img.min(), img.max())
+    img = np.clip(img, 0.0, 1.0)
+    img = (img * 255).astype(np.uint8)
+    
+    Image.fromarray(img).save(filename) 
 
 def main():
     device = spy.create_device(
         include_paths=[pathlib.Path("./shaders")],
         enable_debug_layers=True,
-        type=spy.DeviceType.vulkan
+        enable_print=True,
+        type=spy.DeviceType.vulkan,
     )
 
     camera_transform = Transform.from_xyz(0.0, 1.0, 3.0)
@@ -148,33 +199,68 @@ def main():
     instance_transform.rotate_x(np.pi / 2.0)
     instance_transform.rotate_z(np.pi / 4.0)
 
-
     stage.add_instance(Instance(quad_id, material_id, instance_transform))
     stage.add_instance(Instance(quad_id, material_id, Transform.identity()))
 
-    shader_table_builder = ShaderTableBuilder()
+    width = 256
+    height = 256
 
-    scene = Scene(device, stage, shader_table_builder)
+    reference = render(
+        device,
+        stage,
+        width,
+        height,
+        sample_count=1 << 14,
+        seed=1234,
+    )
+    save_texture(reference, filename="./output/reference.png")
 
-    path_tracer = PathTracer(device, shader_table_builder, width=1024, height=1024)
-    accumulator = Accumulator(device, width=1024, height=1024)
-    
-    random.seed(1234)
+    material: LambertianMaterial = stage.get_material(material_id)
+    material.color = spy.float3(0.5, 0.5, 0.5)
 
-    for _ in tqdm(range(128)):
-        command_encoder = device.create_command_encoder()
+    primal = render(
+        device,
+        stage,
+        width,
+        height,
+        sample_count=1 << 14,
+        seed=1233,
+    )
+    save_texture(primal, filename="./output/primal.png")
 
-        path_tracer.execute(command_encoder, scene)
-        accumulator.execute(command_encoder, path_tracer.sample_texture)
-        
-        device.submit_command_buffer(command_encoder.finish())
-    
-    result = accumulator.accumulation.to_numpy()
-    result = result / result[:,:,3:4]
-    result = np.clip(result, 0.0, 1.0)
-    result = (result * 255).astype(np.uint8)
+    reference_arr = reference.to_numpy()
+    primal_arr = primal.to_numpy()
 
-    Image.fromarray(result).save("./output/example.png")     
+    print(reference_arr.max())
+    print(primal_arr.max())
+
+    loss = np.mean((primal_arr - reference_arr) * (primal_arr - reference_arr))
+    print(f"loss: {loss}")
+
+    adjoint = device.create_texture(
+        format=spy.Format.rgba32_float,
+        width=width,
+        height=height,
+        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
+        label="sample_texture",
+    )
+    adjoint_program = device.load_program("l2_adjoint", ["main"])
+    adjoint_kernel = device.create_compute_kernel(adjoint_program)
+
+    command_encoder = device.create_command_encoder()
+    adjoint_kernel.dispatch(
+        thread_count=[width, height, 1],
+        vars={
+            "primal": primal,
+            "reference": reference,
+            "adjoint": adjoint,
+        },
+        command_encoder=command_encoder,
+    )
+    device.submit_command_buffer(command_encoder.finish())
+
+    save_texture(adjoint, "./output/adjoint.png", scale=1.0)
+
 
 
 if __name__ == "__main__":

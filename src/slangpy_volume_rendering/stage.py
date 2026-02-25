@@ -41,3 +41,9 @@ class Stage:
         instance_id = len(self.instances)
         self.instances.append(instance)
         return instance_id
+
+    def get_material(self, material_id: int) -> Material:
+        return self.materials[material_id]
+
+
+
