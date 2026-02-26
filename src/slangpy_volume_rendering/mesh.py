@@ -4,16 +4,18 @@ import numpy.typing as npt
 class Mesh:
     def __init__(
         self,
-        vertices: npt.NDArray[np.float32],
+        positions: npt.NDArray[np.float32],
+        normals: npt.NDArray[np.float32],
         indices: npt.NDArray[np.uint32],
     ):
         super().__init__()
-        self.vertices = vertices
+        self.positions = positions
+        self.normals = normals
         self.indices = indices
 
     @property
     def vertex_count(self):
-        return self.vertices.shape[0]
+        return self.positions.shape[0]
 
     @property
     def triangle_count(self):
@@ -32,9 +34,16 @@ class Mesh:
             [1.0, 1.0, 0.0],
         ], dtype=np.float32)
 
+        normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ])
+
         indices = np.array([
             [0, 1, 2],
             [3, 2, 1],
         ], dtype=np.uint32)
 
-        return Mesh(vertices=vertices, indices=indices)
+        return Mesh(positions=vertices, normals=normals, indices=indices)

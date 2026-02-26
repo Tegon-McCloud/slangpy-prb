@@ -57,15 +57,21 @@ class SceneMeshList:
             vertex_count += mesh.vertex_count
             index_count += mesh.index_count
         
-        vertices = np.concatenate([mesh.vertices for mesh in meshes], axis=0)
+        positions = np.concatenate([mesh.positions for mesh in meshes], axis=0)
+        normals = np.concatenate([mesh.normals for mesh in meshes], axis=0)
         indices = np.concatenate([mesh.indices for mesh in meshes], axis=0)
 
         mesh_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.mesh_descs), dtype=np.uint8).flatten()
         
-        self.vertex_buffer = self.device.create_buffer(
+        self.position_buffer = self.device.create_buffer(
             usage=spy.BufferUsage.shader_resource,
-            label="vertex_buffer",
-            data=vertices,
+            label="position_buffer",
+            data=positions,
+        )
+        self.normal_buffer = self.device.create_buffer(
+            usage=spy.BufferUsage.shader_resource,
+            label="normal_buffer",
+            data=normals,
         )
         self.index_buffer = self.device.create_buffer(
             usage=spy.BufferUsage.shader_resource,
@@ -83,8 +89,8 @@ class SceneMeshList:
         command_encoder = self.device.create_command_encoder()
         for mesh_desc in self.mesh_descs:
 
-            vertex_offset_pair = spy.BufferOffsetPair(
-                buffer=self.vertex_buffer,
+            position_offset_pair = spy.BufferOffsetPair(
+                buffer=self.position_buffer,
                 offset=mesh_desc.vertex_offset * 12,
             )
             index_offset_pair = spy.BufferOffsetPair(
@@ -93,7 +99,7 @@ class SceneMeshList:
             )
 
             blas_input_triangles = spy.AccelerationStructureBuildInputTriangles({
-                "vertex_buffers": [vertex_offset_pair],
+                "vertex_buffers": [position_offset_pair],
                 "vertex_format": spy.Format.rgb32_float,
                 "vertex_count": mesh_desc.vertex_count,
                 "vertex_stride": 4 * 3,
@@ -283,7 +289,8 @@ class Scene:
         cursor.tlas = self.tlas
         cursor.environment_map = self.environment_texture
 
-        cursor.vertices = self.meshes.vertex_buffer
+        cursor.positions = self.meshes.position_buffer
+        cursor.normals = self.meshes.normal_buffer
         cursor.indices = self.meshes.index_buffer
         cursor.mesh_descs = self.meshes.mesh_desc_buffer
 

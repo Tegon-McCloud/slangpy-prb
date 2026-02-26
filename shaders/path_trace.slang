@@ -40,7 +40,8 @@ struct Scene {
 
     PerspectiveCamera camera;
 
-    StructuredBuffer<float3> vertices;
+    StructuredBuffer<float3> positions;
+    StructuredBuffer<float3> normals;
     StructuredBuffer<uint> indices;
     StructuredBuffer<MeshDesc> mesh_descs;
 
@@ -111,16 +112,13 @@ void closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAt
     uint i1 = scene.indices[mesh_desc.index_offset + primitive_index * 3 + 1];
     uint i2 = scene.indices[mesh_desc.index_offset + primitive_index * 3 + 2];
 
-    float3 v0 = scene.vertices[mesh_desc.vertex_offset + i0];
-    float3 v1 = scene.vertices[mesh_desc.vertex_offset + i1];
-    float3 v2 = scene.vertices[mesh_desc.vertex_offset + i2];
+    float3 n0 = scene.normals[mesh_desc.vertex_offset + i0];
+    float3 n1 = scene.normals[mesh_desc.vertex_offset + i1];
+    float3 n2 = scene.normals[mesh_desc.vertex_offset + i2];
 
     float3 barycentrics = float3(1.0 - attribs.barycentrics.x - attribs.barycentrics.y, attribs.barycentrics.x, attribs.barycentrics.y);
 
-    float3 e1 = v1 - v0;
-    float3 e2 = v2 - v0;
-
-    float3 n_object = cross(e1, e2);
+    float3 n_object = normalize(barycentrics.x * n0 + barycentrics.y * n1 + barycentrics.z * n2);
 
     float t = RayTCurrent();
     float3 p = path.position + t * path.direction;

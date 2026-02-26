@@ -7,7 +7,6 @@ import slangpy as spy
 import pygltflib
 from pygltflib import GLTF2
 
-
 from . import Transform, PerspectiveCamera, Mesh, Material
 
 class Instance:
@@ -98,9 +97,6 @@ class Stage:
                     transform=transform,
                 ))
 
-        
-
-
     def _load_gltf_meshes(self, gltf: GLTF2) -> list[GltfMeshDescriptor]:
 
         from . import LambertianMaterial
@@ -114,14 +110,15 @@ class Stage:
 
             for primitive in gltf_mesh.primitives:
                 positions = self._read_gltf_accessor(gltf, primitive.attributes.POSITION)
- 
+                normals = self._read_gltf_accessor(gltf, primitive.attributes.NORMAL)
+
                 indices = self._read_gltf_accessor(gltf, primitive.indices)
                 indices = indices.astype(np.uint32)
                 indices = indices.reshape((-1, 3))
 
                 print(indices.min(), indices.max(), positions.shape)
 
-                mesh_handle = self.add_mesh(Mesh(positions, indices))
+                mesh_handle = self.add_mesh(Mesh(positions, normals, indices))
 
                 primitive_mesh_handles.append(mesh_handle)
                 primitive_material_handles.append(material_handle)
