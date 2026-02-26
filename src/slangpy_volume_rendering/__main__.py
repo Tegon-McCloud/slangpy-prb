@@ -159,11 +159,13 @@ def render(device: spy.Device, stage: Stage, width: int, height: int, sample_cou
         path_tracer.execute(command_encoder, scene)
         accumulator.accumulate(command_encoder, path_tracer.sample_texture)
         
-        device.submit_command_buffer(command_encoder.finish())
+        submit_id = device.submit_command_buffer(command_encoder.finish())
+        device.wait_for_submit(submit_id)
 
     command_encoder = device.create_command_encoder()
     accumulator.normalize(command_encoder)
-    device.submit_command_buffer(command_encoder.finish())
+    submit_id = device.submit_command_buffer(command_encoder.finish())
+    device.wait_for_submit(submit_id)
 
     return accumulator.accumulation
 
@@ -185,83 +187,85 @@ def main():
     )
 
     camera_transform = Transform.from_xyz(0.0, 1.0, 3.0)
+    
 
     stage = Stage(
         camera=PerspectiveCamera(camera_transform, np.pi / 2.0, 1.0),
         environment=spy.Bitmap.load_from_file("./assets/kloppenheim_06_puresky_4k.hdr"),
     )
-    quad_id = stage.add_mesh(Mesh.quad())
 
-    material_id = stage.add_material(LambertianMaterial(color=spy.float3(1.0, 0.0, 0.0)))
+    stage.load_gltf("./assets/DragonAttenuation.glb")
+
+    # quad_id = stage.add_mesh(Mesh.quad())
+
+    # material_id = stage.add_material(LambertianMaterial(color=spy.float3(1.0, 0.0, 0.0)))
     # material_id_2 = stage.add_material(MicrofacetMaterial(roughness=0.7))
 
-    instance_transform = Transform.identity()
-    instance_transform.rotate_x(np.pi / 2.0)
-    instance_transform.rotate_z(np.pi / 4.0)
+    # instance_transform = Transform.identity()
+    # instance_transform.rotate_x(np.pi / 2.0)
+    # instance_transform.rotate_z(np.pi / 4.0)
 
-    stage.add_instance(Instance(quad_id, material_id, instance_transform))
-    stage.add_instance(Instance(quad_id, material_id, Transform.identity()))
+    # stage.add_instance(Instance(quad_id, material_id, instance_transform))
+    # stage.add_instance(Instance(quad_id, material_id, Transform.identity()))
 
-    width = 256
-    height = 256
+    width = 1024
+    height = 1024
 
     reference = render(
         device,
         stage,
         width,
         height,
-        sample_count=1 << 14,
+        sample_count=1 << 10,
         seed=1234,
     )
     save_texture(reference, filename="./output/reference.png")
 
-    material: LambertianMaterial = stage.get_material(material_id)
-    material.color = spy.float3(0.5, 0.5, 0.5)
+    # material: LambertianMaterial = stage.get_material(0)
+    # material.color = spy.float3(0.5, 0.5, 0.5)
 
-    primal = render(
-        device,
-        stage,
-        width,
-        height,
-        sample_count=1 << 14,
-        seed=1233,
-    )
-    save_texture(primal, filename="./output/primal.png")
+    # primal = render(
+    #     device,
+    #     stage,
+    #     width,
+    #     height,
+    #     sample_count=1 << 12,
+    #     seed=1233,
+    # )
+    # save_texture(primal, filename="./output/primal.png")
 
-    reference_arr = reference.to_numpy()
-    primal_arr = primal.to_numpy()
+    # reference_arr = reference.to_numpy()
+    # primal_arr = primal.to_numpy()
 
-    print(reference_arr.max())
-    print(primal_arr.max())
+    # print(reference_arr.max())
+    # print(primal_arr.max())
 
-    loss = np.mean((primal_arr - reference_arr) * (primal_arr - reference_arr))
-    print(f"loss: {loss}")
+    # loss = np.mean((primal_arr - reference_arr) * (primal_arr - reference_arr))
+    # print(f"loss: {loss}")
 
-    adjoint = device.create_texture(
-        format=spy.Format.rgba32_float,
-        width=width,
-        height=height,
-        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
-        label="sample_texture",
-    )
-    adjoint_program = device.load_program("l2_adjoint", ["main"])
-    adjoint_kernel = device.create_compute_kernel(adjoint_program)
+    # adjoint = device.create_texture(
+    #     format=spy.Format.rgba32_float,
+    #     width=width,
+    #     height=height,
+    #     usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
+    #     label="sample_texture",
+    # )
+    # adjoint_program = device.load_program("l2_adjoint", ["main"])
+    # adjoint_kernel = device.create_compute_kernel(adjoint_program)
 
-    command_encoder = device.create_command_encoder()
-    adjoint_kernel.dispatch(
-        thread_count=[width, height, 1],
-        vars={
-            "primal": primal,
-            "reference": reference,
-            "adjoint": adjoint,
-        },
-        command_encoder=command_encoder,
-    )
-    device.submit_command_buffer(command_encoder.finish())
+    # command_encoder = device.create_command_encoder()
+    # adjoint_kernel.dispatch(
+    #     thread_count=[width, height, 1],
+    #     vars={
+    #         "primal": primal,
+    #         "reference": reference,
+    #         "adjoint": adjoint,
+    #     },
+    #     command_encoder=command_encoder,
+    # )
+    # device.submit_command_buffer(command_encoder.finish())
 
-    save_texture(adjoint, "./output/adjoint.png", scale=1.0)
-
-
+    # save_texture(adjoint, "./output/adjoint.png", scale=1.0)
 
 if __name__ == "__main__":
     main()

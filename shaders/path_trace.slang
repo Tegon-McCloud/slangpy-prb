@@ -2,11 +2,6 @@ import util;
 import random;
 import bsdf;
 
-static const int max_depth = 8;
-
-const uint sample_seed;
-RWTexture2D<float4> sample_texture;
-
 struct MeshDesc {
     uint vertex_offset;
     uint index_offset;
@@ -54,6 +49,10 @@ struct Scene {
     StructuredBuffer<InstanceDesc> instance_descs;
 }
 
+static const int max_depth = 8;
+
+const uint sample_seed;
+RWTexture2D<float4> sample_texture;
 ParameterBlock<Scene> scene;
 
 struct Ray {
@@ -112,9 +111,9 @@ void closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAt
     uint i1 = scene.indices[mesh_desc.index_offset + primitive_index * 3 + 1];
     uint i2 = scene.indices[mesh_desc.index_offset + primitive_index * 3 + 2];
 
-    float3 v0 = scene.vertices[i0];
-    float3 v1 = scene.vertices[i1];
-    float3 v2 = scene.vertices[i2];
+    float3 v0 = scene.vertices[mesh_desc.vertex_offset + i0];
+    float3 v1 = scene.vertices[mesh_desc.vertex_offset + i1];
+    float3 v2 = scene.vertices[mesh_desc.vertex_offset + i2];
 
     float3 barycentrics = float3(1.0 - attribs.barycentrics.x - attribs.barycentrics.y, attribs.barycentrics.x, attribs.barycentrics.y);
 

@@ -65,7 +65,7 @@ class SceneMeshList:
         self.vertex_buffer = self.device.create_buffer(
             usage=spy.BufferUsage.shader_resource,
             label="vertex_buffer",
-            data=vertices,    
+            data=vertices,
         )
         self.index_buffer = self.device.create_buffer(
             usage=spy.BufferUsage.shader_resource,
@@ -82,12 +82,22 @@ class SceneMeshList:
 
         command_encoder = self.device.create_command_encoder()
         for mesh_desc in self.mesh_descs:
+
+            vertex_offset_pair = spy.BufferOffsetPair(
+                buffer=self.vertex_buffer,
+                offset=mesh_desc.vertex_offset * 12,
+            )
+            index_offset_pair = spy.BufferOffsetPair(
+                buffer=self.index_buffer,
+                offset=mesh_desc.index_offset * 4,
+            )
+
             blas_input_triangles = spy.AccelerationStructureBuildInputTriangles({
-                "vertex_buffers": [self.vertex_buffer],
+                "vertex_buffers": [vertex_offset_pair],
                 "vertex_format": spy.Format.rgb32_float,
                 "vertex_count": mesh_desc.vertex_count,
                 "vertex_stride": 4 * 3,
-                "index_buffer": self.index_buffer,
+                "index_buffer": index_offset_pair,
                 "index_format": spy.IndexFormat.uint32,
                 "index_count": mesh_desc.index_count,
                 "flags": spy.AccelerationStructureGeometryFlags.opaque,

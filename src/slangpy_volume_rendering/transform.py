@@ -1,20 +1,29 @@
 import slangpy as spy
 
 class Transform:
-    def __init__(self):
+    def __init__(
+        self,
+        translation: spy.float3,
+        rotation: spy.quatf,
+        scale: spy.float3,
+    ):
         super().__init__()
 
-        self.translation = spy.float3(0)
-        self.rotation = spy.quatf.identity()
-        self.scale = spy.float3(1)
+        self.translation = translation
+        self.rotation = rotation
+        self.scale = scale
 
     @staticmethod
     def identity() -> 'Transform':
-        return Transform()
+        return Transform(
+            spy.float3(0),
+            spy.quatf.identity(),
+            spy.float3(1),
+        )
 
     @staticmethod
     def from_xyz(x: float, y: float, z: float) -> 'Transform':
-        transform = Transform()
+        transform = Transform.identity()
         transform.translation = spy.float3(x, y, z)
         
         return transform
@@ -55,6 +64,12 @@ class Transform:
 
     def transform_point(self, point: spy.float3) -> spy.float3:
         point = self.scale * point
-        point = self.rotation * point
+        point = spy.math.mul(self.rotation, point)
         point += self.translation
         return point
+    
+    def __mul__(self, other: 'Transform') -> 'Transform':
+        translation = self.transform_point(other.translation)
+        rotation = spy.math.mul(self.rotation, other.rotation)
+        scale = self.scale * other.scale
+        return Transform(translation, rotation, scale)
