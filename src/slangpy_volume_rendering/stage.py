@@ -116,8 +116,6 @@ class Stage:
                 indices = indices.astype(np.uint32)
                 indices = indices.reshape((-1, 3))
 
-                print(indices.min(), indices.max(), positions.shape)
-
                 mesh_handle = self.add_mesh(Mesh(positions, normals, indices))
 
                 primitive_mesh_handles.append(mesh_handle)

@@ -43,6 +43,12 @@ class Transform:
         rotation = spy.quatf(0.0, 0.0, spy.math.sin(half_angle), spy.math.cos(half_angle))
         self.rotation = spy.math.mul(rotation, self.rotation)
 
+    def look_at(self, target: spy.float3, up: spy.float3):
+        self.look_to(spy.math.normalize(target - self.translation), up)
+    
+    def look_to(self, direction: spy.float3, up: spy.float3):
+        self.rotation = spy.math.quat_from_look_at(direction, up)
+
     def translate(self, vector: spy.float3):
         self.translation = self.translation + vector
 

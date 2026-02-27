@@ -2,6 +2,7 @@ import random
 import pathlib
 
 import numpy as np
+import numpy.typing as npt
 import slangpy as spy
 from PIL import Image
 from tqdm import tqdm
@@ -13,20 +14,10 @@ class PathTracer:
         self,
         device: spy.Device,
         shader_table_builder: ShaderTableBuilder,
-        width: int,
-        height: int,
     ):
         super().__init__()
 
         self.device = device
-
-        self.sample_texture: spy.Texture = device.create_texture(
-            format=spy.Format.rgba32_float,
-            width=width,
-            height=height,
-            usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
-            label="sample_texture",
-        )
 
         module_names = [
             path.name
@@ -71,70 +62,48 @@ class PathTracer:
         )
 
 
-
-    def execute(
+    def sample(
         self,
         command_encoder: spy.CommandEncoder,
         scene: Scene,
+        render_target: Scene,
+        sample_index: int,
     ):
+
         with command_encoder.begin_ray_tracing_pass() as pass_encoder:
             shader_object = pass_encoder.bind_pipeline(self.pipeline, self.shader_table)
             cursor = spy.ShaderCursor(shader_object)
+
             cursor.sample_seed = random.getrandbits(32)
-            cursor.sample_texture = self.sample_texture
+            cursor.sample_index = sample_index
+            cursor.render_target = render_target
             scene.bind(cursor.scene)
 
-            pass_encoder.dispatch_rays(0, [self.sample_texture.width, self.sample_texture.height, 1])
+            pass_encoder.dispatch_rays(0, [render_target.width, render_target.height, 1])
 
-
-class Accumulator:
+class Tonemapper:
 
     def __init__(
         self,
         device: spy.Device,
-        width: int,
-        height: int,
     ):
-        super().__init__()
         self.device = device
-        self.accumulate_program = self.device.load_program("accumulate.slang", ["accumulate"])
-        self.normalize_program = self.device.load_program("normalize.slang", ["normalize"])
+        self.program = self.device.load_program("tonemap.slang", ["main"])
 
-        self.accumulate_kernel = self.device.create_compute_kernel(self.accumulate_program)
-        self.normalize_kernel = self.device.create_compute_kernel(self.normalize_program)
-        self.accumulation = self.device.create_texture(
-            format=spy.Format.rgba32_float,
-            width=width,
-            height=height,
-            usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
-            label="accumulation",
-        )
+        self.kernel = self.device.create_compute_kernel(self.program)
 
-    def accumulate(
+    def tonemap(
         self,
         command_encoder: spy.CommandEncoder,
-        sample: spy.Texture,
+        input: spy.Texture,
+        output: spy.Texture,    
     ):
-        self.accumulate_kernel.dispatch(
-            thread_count=[self.accumulation.width, self.accumulation.height, 1],
+        self.kernel.dispatch(
+            thread_count=[output.width, output.height, 1],
             vars={
-                "accumulator": {
-                    "sample": sample,
-                    "accumulation": self.accumulation,
-                },
-            },
-            command_encoder=command_encoder,
-        )
-
-    def normalize(
-        self,
-        command_encoder: spy.CommandEncoder,
-    ):
-        self.normalize_kernel.dispatch(
-            thread_count=[self.accumulation.width, self.accumulation.height, 1],
-            vars={
-                "accumulator": {
-                    "accumulation": self.accumulation,
+                "tonemapper": {
+                    "input": input,
+                    "output": output,
                 },
             },
             command_encoder=command_encoder,
@@ -148,37 +117,40 @@ def render(device: spy.Device, stage: Stage, width: int, height: int, sample_cou
 
     scene = Scene(device, stage, shader_table_builder)
 
-    path_tracer = PathTracer(device, shader_table_builder, width, height)
-    accumulator = Accumulator(device, width, height)
-    
+    path_tracer = PathTracer(device, shader_table_builder)
     random.seed(seed)
 
-    for _ in tqdm(range(sample_count)):
+    render_target = device.create_texture(
+        format=spy.Format.rgba32_float,
+        width=width,
+        height=height,
+        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
+        label="render_target",
+    )
+
+    for sample_index in tqdm(range(sample_count)):
         command_encoder = device.create_command_encoder()
 
-        path_tracer.execute(command_encoder, scene)
-        accumulator.accumulate(command_encoder, path_tracer.sample_texture)
+        path_tracer.sample(
+            command_encoder,
+            scene,
+            render_target,
+            sample_index,
+        )
         
         submit_id = device.submit_command_buffer(command_encoder.finish())
         device.wait_for_submit(submit_id)
 
-    command_encoder = device.create_command_encoder()
-    accumulator.normalize(command_encoder)
-    submit_id = device.submit_command_buffer(command_encoder.finish())
-    device.wait_for_submit(submit_id)
+    return render_target
 
-    return accumulator.accumulation
-
-def save_texture(texture: spy.Texture, filename: str, scale: float = 1.0):
-    img = texture.to_numpy()
-    img = scale * img
-    print(img.min(), img.max())
+def save_img(img: npt.NDArray, filename: str):
     img = np.clip(img, 0.0, 1.0)
     img = (img * 255).astype(np.uint8)
     
     Image.fromarray(img).save(filename) 
 
 def main():
+
     device = spy.create_device(
         include_paths=[pathlib.Path("./shaders")],
         enable_debug_layers=True,
@@ -186,27 +158,15 @@ def main():
         type=spy.DeviceType.vulkan,
     )
 
-    camera_transform = Transform.from_xyz(0.0, 1.0, 3.0)
+    camera_transform = Transform.from_xyz(-0.4, 2.0, 4.5)
+    camera_transform.look_at(spy.float3(-0.2, 0.5, 0.0), spy.float3(0.0, 1.0, 0.0))
     
-
     stage = Stage(
-        camera=PerspectiveCamera(camera_transform, np.pi / 2.0, 1.0),
+        camera=PerspectiveCamera(camera_transform, np.pi / 4.0, 1.0),
         environment=spy.Bitmap.load_from_file("./assets/kloppenheim_06_puresky_4k.hdr"),
     )
 
     stage.load_gltf("./assets/DragonAttenuation.glb")
-
-    # quad_id = stage.add_mesh(Mesh.quad())
-
-    # material_id = stage.add_material(LambertianMaterial(color=spy.float3(1.0, 0.0, 0.0)))
-    # material_id_2 = stage.add_material(MicrofacetMaterial(roughness=0.7))
-
-    # instance_transform = Transform.identity()
-    # instance_transform.rotate_x(np.pi / 2.0)
-    # instance_transform.rotate_z(np.pi / 4.0)
-
-    # stage.add_instance(Instance(quad_id, material_id, instance_transform))
-    # stage.add_instance(Instance(quad_id, material_id, Transform.identity()))
 
     width = 1024
     height = 1024
@@ -219,53 +179,22 @@ def main():
         sample_count=1 << 10,
         seed=1234,
     )
-    save_texture(reference, filename="./output/reference.png")
 
-    # material: LambertianMaterial = stage.get_material(0)
-    # material.color = spy.float3(0.5, 0.5, 0.5)
+    tonemapper = Tonemapper(device)
+    reference_output = device.create_texture(
+        format=spy.Format.rgba32_float,
+        width=width,
+        height=height,
+        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
+        label="reference_output",
+    )
 
-    # primal = render(
-    #     device,
-    #     stage,
-    #     width,
-    #     height,
-    #     sample_count=1 << 12,
-    #     seed=1233,
-    # )
-    # save_texture(primal, filename="./output/primal.png")
+    command_encoder = device.create_command_encoder()
+    tonemapper.tonemap(command_encoder, reference, reference_output)
+    device.submit_command_buffer(command_encoder.finish())
 
-    # reference_arr = reference.to_numpy()
-    # primal_arr = primal.to_numpy()
+    save_img(reference_output.to_numpy(), filename="./output/reference.png")
 
-    # print(reference_arr.max())
-    # print(primal_arr.max())
-
-    # loss = np.mean((primal_arr - reference_arr) * (primal_arr - reference_arr))
-    # print(f"loss: {loss}")
-
-    # adjoint = device.create_texture(
-    #     format=spy.Format.rgba32_float,
-    #     width=width,
-    #     height=height,
-    #     usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
-    #     label="sample_texture",
-    # )
-    # adjoint_program = device.load_program("l2_adjoint", ["main"])
-    # adjoint_kernel = device.create_compute_kernel(adjoint_program)
-
-    # command_encoder = device.create_command_encoder()
-    # adjoint_kernel.dispatch(
-    #     thread_count=[width, height, 1],
-    #     vars={
-    #         "primal": primal,
-    #         "reference": reference,
-    #         "adjoint": adjoint,
-    #     },
-    #     command_encoder=command_encoder,
-    # )
-    # device.submit_command_buffer(command_encoder.finish())
-
-    # save_texture(adjoint, "./output/adjoint.png", scale=1.0)
 
 if __name__ == "__main__":
     main()

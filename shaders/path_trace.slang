@@ -50,10 +50,13 @@ struct Scene {
     StructuredBuffer<InstanceDesc> instance_descs;
 }
 
-static const int max_depth = 8;
+static const uint max_depth = 8;
+
 
 const uint sample_seed;
-RWTexture2D<float4> sample_texture;
+const uint sample_index;
+
+RWTexture2D<float4> render_target;
 ParameterBlock<Scene> scene;
 
 struct Ray {
@@ -201,7 +204,9 @@ void ray_gen()
         );
     }
 
-    sample_texture[pixel] = float4(path.radiance, 1.0);
+    float3 radiance = render_target[pixel].rgb;
+    radiance = lerp(radiance, path.radiance, 1.0 / (sample_index + 1.0));
+    render_target[pixel] = float4(radiance, 1.0);
 }
 
 [shader("raygen")]
