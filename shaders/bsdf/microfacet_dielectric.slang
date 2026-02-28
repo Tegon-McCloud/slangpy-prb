@@ -1,21 +1,20 @@
 implementing bsdf;
 
-struct MicrofacetParameters {
+struct MicrofacetDielectricParameters {
+    float ior;
     float roughness;
-    float ior; 
-}
-
-
-[shader("callable")]
-void call_evaluate_microfacet_ss(inout BsdfEvaluation e)
-{
-    MicrofacetParameters parameters = e.get_parameters<MicrofacetParameters>();
 }
 
 [shader("callable")]
-void call_sample_microfacet_ss(inout BsdfSample s)
+void call_evaluate_microfacet_dielectric_ss(inout BsdfEvaluation e)
 {
-    MicrofacetParameters parameters = s.get_parameters<MicrofacetParameters>();
+    MicrofacetDielectricParameters parameters = e.get_parameters<MicrofacetDielectricParameters>();
+}
+
+[shader("callable")]
+void call_sample_microfacet_dielectric_ss(inout BsdfSample s)
+{
+    MicrofacetDielectricParameters parameters = s.get_parameters<MicrofacetDielectricParameters>();
     float alpha = parameters.roughness * parameters.roughness;
     float3 wi = s.wi;
     bool entering = wi.z > 0.0;

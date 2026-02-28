@@ -7,9 +7,7 @@ import slangpy as spy
 from PIL import Image
 from tqdm import tqdm
 
-from . import Transform,  Mesh, Material, Instance, \
-    Stage, ShaderTableBuilder, Scene, PerspectiveCamera, \
-    LambertianMaterial, SpecularConductorMaterial, SpecularDielectricMaterial, MicrofacetMaterial
+from . import *
 
 class PathTracer:
     def __init__(
@@ -169,10 +167,10 @@ def main():
 
     stage.load_gltf("./assets/XYZRGBDragon.glb")
 
+    # stage.replace_material(0, SpecularConductorMaterial.cobalt())
     # stage.replace_material(0, SpecularDielectricMaterial(ior=1.5))
-    stage.replace_material(0, SpecularConductorMaterial.copper())
-    # stage.replace_material(0, MicrofacetMaterial(roughness=0.4, ior=1.5))
-
+    stage.replace_material(0, MicrofacetConductorMaterial.gold(roughness=0.4))
+    # stage.replace_material(0, MicrofacetDielectricMaterial(roughness=0.4, ior=1.5))
 
     reference = render(
         device,

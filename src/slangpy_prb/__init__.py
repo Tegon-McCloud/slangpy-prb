@@ -1,5 +1,7 @@
 from .transform import Transform
-from .material import Material, LambertianMaterial, SpecularConductorMaterial, SpecularDielectricMaterial, MicrofacetMaterial
+from .material import Material, LambertianMaterial, \
+    SpecularConductorMaterial, SpecularDielectricMaterial, \
+    MicrofacetDielectricMaterial, MicrofacetConductorMaterial 
 from .mesh import Mesh
 from .camera import PerspectiveCamera
 from .stage import Instance, Stage
