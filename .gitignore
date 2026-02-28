@@ -17,3 +17,6 @@ wheels/
 
 # Program output
 output/
+
+# Large assets
+assets/XYZRGBDragon.glb

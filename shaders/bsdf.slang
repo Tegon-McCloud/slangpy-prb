@@ -1,9 +1,10 @@
 module bsdf;
 __include bsdf.lambertian;
-__include bsdf.microfacet;
+__include bsdf.specular_conductor;
+__include bsdf.specular_dielectric;
+__include bsdf.microfacet_dielectric;
 
 import util;
-import random;
 
 public struct BsdfEvaluation {
     /*
@@ -36,10 +37,11 @@ public struct BsdfSample {
     */
     public uint64_t parameters;
     public uint rand_state;
-    public float3 wo;
+    public uint error_state;
     public float3 wi;
-    public float3 value;
-    public float pdf;
+    public float ior_outside;
+    public float3 wo;
+    public float3 weight;
 
     [mutating]
     public void set_parameter_ptr(Ptr<void, Access.Read, AddressSpace.Device> parameters) {

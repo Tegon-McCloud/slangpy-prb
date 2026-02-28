@@ -29,14 +29,13 @@ class GltfMeshDescriptor:
 class Stage:
     def __init__(
         self,
-        camera: PerspectiveCamera,
         environment: spy.Bitmap | None,
     ):
         super().__init__()
         self.meshes: list[Mesh] = []
         self.materials: list[Material] = []
         self.instances: list[Instance] = []
-        self.camera = camera
+        self.camera = PerspectiveCamera()
         self.environment = environment
 
     def add_mesh(self, mesh: Mesh) -> int:
@@ -57,6 +56,10 @@ class Stage:
     def get_material(self, material_id: int) -> Material:
         return self.materials[material_id]
     
+    def replace_material(self, material_id: int, material: Material):
+        self.materials[material_id] = material
+
+
     def load_gltf(self, path: pathlib.Path):
         gltf = GLTF2().load(path)
         
@@ -97,14 +100,31 @@ class Stage:
                     transform=transform,
                 ))
 
+
+        if node.camera != None:
+            camera = gltf.cameras[node.camera]
+            
+            if camera.perspective != None:
+                perspective = camera.perspective
+                self.camera = PerspectiveCamera(
+                    transform,
+                    vfov=perspective.yfov,
+                    aspect_ratio=perspective.aspectRatio,
+                )
+
+            elif camera.orthographic:
+                raise RuntimeError("Not implemented")
+
     def _load_gltf_meshes(self, gltf: GLTF2) -> list[GltfMeshDescriptor]:
 
         from . import LambertianMaterial
-        material_handle = self.add_material(LambertianMaterial(spy.float3(0.5, 0.5, 0.5)))
 
         gltf_meshes: list[GltfMeshDescriptor] = []
 
-        for gltf_mesh in gltf.meshes:            
+        for gltf_mesh in gltf.meshes:
+
+            material_handle = self.add_material(LambertianMaterial(spy.float3(0.5, 0.5, 0.5)))
+
             primitive_mesh_handles: list[int] = []
             primitive_material_handles: list[int] = []
 

@@ -7,7 +7,9 @@ import slangpy as spy
 from PIL import Image
 from tqdm import tqdm
 
-from . import Transform, Mesh, Material, Instance, Stage, ShaderTableBuilder, Scene, PerspectiveCamera, LambertianMaterial
+from . import Transform,  Mesh, Material, Instance, \
+    Stage, ShaderTableBuilder, Scene, PerspectiveCamera, \
+    LambertianMaterial, SpecularConductorMaterial, SpecularDielectricMaterial, MicrofacetMaterial
 
 class PathTracer:
     def __init__(
@@ -158,18 +160,19 @@ def main():
         type=spy.DeviceType.vulkan,
     )
 
-    camera_transform = Transform.from_xyz(-0.4, 2.0, 4.5)
-    camera_transform.look_at(spy.float3(-0.2, 0.5, 0.0), spy.float3(0.0, 1.0, 0.0))
-    
+    width = 1920
+    height = 1080
+
     stage = Stage(
-        camera=PerspectiveCamera(camera_transform, np.pi / 4.0, 1.0),
         environment=spy.Bitmap.load_from_file("./assets/kloppenheim_06_puresky_4k.hdr"),
     )
 
-    stage.load_gltf("./assets/DragonAttenuation.glb")
+    stage.load_gltf("./assets/XYZRGBDragon.glb")
 
-    width = 1024
-    height = 1024
+    # stage.replace_material(0, SpecularDielectricMaterial(ior=1.5))
+    stage.replace_material(0, SpecularConductorMaterial.copper())
+    # stage.replace_material(0, MicrofacetMaterial(roughness=0.4, ior=1.5))
+
 
     reference = render(
         device,

@@ -1,5 +1,4 @@
 import util;
-import random;
 import bsdf;
 
 struct MeshDesc {
@@ -46,7 +45,7 @@ struct Scene {
     StructuredBuffer<MeshDesc> mesh_descs;
 
     StructuredBuffer<MaterialDesc> material_descs;
-    
+
     StructuredBuffer<InstanceDesc> instance_descs;
 }
 
@@ -79,7 +78,7 @@ struct Path {
     }
 
     bool is_terminated() {
-        return depth >= max_depth;
+        return depth >= max_depth || all(direction == float3(0.0));
     }
 }
 
@@ -128,26 +127,30 @@ void closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAt
 
     float3 n = mul(ObjectToWorld(), float4(n_object, 0.0));
 
-    if (dot(n, path.direction) > 0.0) {
-        n = -n;
-    }
-
     float3x3 tangent_to_world = make_tbn_matrix(n);
     float3x3 world_to_tangent = transpose(tangent_to_world);
-    
+
     float3 wo = mul(world_to_tangent, -path.direction);
-    
+
     BsdfSample bsdf_sample;
     bsdf_sample.set_parameter_ptr(material_desc.parameters);
-    bsdf_sample.wo = wo;
     bsdf_sample.rand_state = path.rand_state;
+    bsdf_sample.error_state = 0;
+    bsdf_sample.wi = wo; // reciprocity
+    bsdf_sample.ior_outside = 1.0; // TODO: keep track of ior's with stack
 
     CallShader(material_desc.sample_call_index, bsdf_sample);
 
-    float3 wi = bsdf_sample.wi;
+    if (path.depth == 1 && bsdf_sample.error_state != 0) {
+        path.radiance = float3(10.0, 0.0, 10.0);
+        path.terminate();
+        return;
+    }
+
+    float3 wi = bsdf_sample.wo; // reciprocity
 
     path.rand_state = bsdf_sample.rand_state;
-    path.throughput *= bsdf_sample.value / bsdf_sample.pdf;
+    path.throughput *= bsdf_sample.weight;
     path.depth += 1;
 
     path.position = p;
@@ -167,11 +170,10 @@ void ray_gen()
 
     uint tid = pixel.y * dim.x + pixel.x;
 
-    
     Path path = {};
-    
+
     path.rand_state = combine_seeds(sample_seed, tid);
-    
+
     float2 uv = (float2(pixel) + float2(rnd(path.rand_state), rnd(path.rand_state))) / float2(dim);
     Ray camera_ray = scene.camera.getRay(uv);
 
@@ -211,7 +213,7 @@ void ray_gen()
 
 [shader("raygen")]
 void ray_gen_adjoint() {
-    
+
 
 }
 

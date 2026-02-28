@@ -22,13 +22,6 @@ void call_sample_lambertian(inout BsdfSample s)
 {
     LambertianParameters parameters = s.get_parameters<LambertianParameters>();
 
-    s.wi = sample_cosine_hemisphere(s.rand_state);
-    float cos_theta = s.wi.z;
-
-    if (dot(s.wi, s.wo) < 0.0) {
-        s.wi = -s.wi;
-    }
-
-    s.value = parameters.color / pi;
-    s.pdf = cos_theta / pi;
+    s.wo = sign(s.wi.z) * sample_cosine_hemisphere(s.rand_state);
+    s.weight = parameters.color;
 }

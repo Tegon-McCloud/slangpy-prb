@@ -5,9 +5,9 @@ from . import Transform
 class PerspectiveCamera:
     def __init__(
         self,
-        transform: Transform,
-        vfov: float,
-        aspect_ratio: float,
+        transform: Transform = Transform.identity(),
+        vfov: float = 1.0,
+        aspect_ratio: float = 1.0,
     ):
         super().__init__()
         self.transform = transform

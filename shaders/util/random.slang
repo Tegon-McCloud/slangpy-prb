@@ -1,6 +1,4 @@
-module random;
-
-import util;
+implementing util;
 
 // PRNG xorshift seed generator by NVIDIA
 public uint combine_seeds(uint v0, uint v1)
