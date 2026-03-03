@@ -1,7 +1,7 @@
 implementing bsdf;
 
-struct LambertianParameters {
-    float3 color;
+public struct LambertianParameters {
+    public float3 color;
 }
 
 [shader("callable")]
@@ -21,7 +21,7 @@ void call_evaluate_lambertian(inout BsdfEvaluation e)
 void call_sample_lambertian(inout BsdfSample s)
 {
     LambertianParameters parameters = s.get_parameters<LambertianParameters>();
-
+    
     s.wo = sign(s.wi.z) * sample_cosine_hemisphere(s.rand_state);
     s.weight = parameters.color;
 }

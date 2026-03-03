@@ -110,14 +110,9 @@ class Tonemapper:
         )
 
 
+def render(device: spy.Device, scene: Scene, path_tracer: PathTracer, width: int, height: int, sample_count: int, seed: int) -> spy.Texture:
 
-def render(device: spy.Device, stage: Stage, width: int, height: int, sample_count: int, seed: int) -> spy.Texture:
 
-    shader_table_builder = ShaderTableBuilder()
-
-    scene = Scene(device, stage, shader_table_builder)
-
-    path_tracer = PathTracer(device, shader_table_builder)
     random.seed(seed)
 
     render_target = device.create_texture(
@@ -149,6 +144,23 @@ def save_img(img: npt.NDArray, filename: str):
     
     Image.fromarray(img).save(filename) 
 
+def tonemap_and_save_texture(device: spy.Device, texture: spy.Texture, filename: str):
+
+    tonemapper = Tonemapper(device)
+    output = device.create_texture(
+        format=spy.Format.rgba32_float,
+        width=texture.width,
+        height=texture.height,
+        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
+        label="output",
+    )
+
+    command_encoder = device.create_command_encoder()
+    tonemapper.tonemap(command_encoder, texture, output)
+    device.submit_command_buffer(command_encoder.finish())
+
+    save_img(output.to_numpy(), filename=filename)
+
 def main():
 
     device = spy.create_device(
@@ -167,34 +179,51 @@ def main():
 
     stage.load_gltf("./assets/XYZRGBDragon.glb")
 
+    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.8, 0.2, 0.2)))
     # stage.replace_material(0, SpecularConductorMaterial.cobalt())
     # stage.replace_material(0, SpecularDielectricMaterial(ior=1.5))
-    stage.replace_material(0, MicrofacetConductorMaterial.gold(roughness=0.4))
+    # stage.replace_material(0, MicrofacetConductorMaterial.gold(roughness=0.4))
     # stage.replace_material(0, MicrofacetDielectricMaterial(roughness=0.4, ior=1.5))
+
+    shader_table_builder = ShaderTableBuilder()
+    scene = Scene(device, stage, shader_table_builder)
+    path_tracer = PathTracer(device, shader_table_builder)
 
     reference = render(
         device,
-        stage,
+        scene,
+        path_tracer,
         width,
         height,
         sample_count=1 << 10,
         seed=1234,
     )
 
-    tonemapper = Tonemapper(device)
-    reference_output = device.create_texture(
-        format=spy.Format.rgba32_float,
-        width=width,
-        height=height,
-        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
-        label="reference_output",
+    tonemap_and_save_texture(device, reference, "./output/reference.png")
+
+    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.5, 0.5, 0.5)))
+    
+    shader_table_builder = ShaderTableBuilder()
+    scene = Scene(device, stage, shader_table_builder)
+    path_tracer = PathTracer(device, shader_table_builder)
+
+    primal = render(
+        device,
+        scene,
+        path_tracer,
+        width,
+        height,
+        sample_count=1 << 10,
+        seed=1233, 
     )
 
-    command_encoder = device.create_command_encoder()
-    tonemapper.tonemap(command_encoder, reference, reference_output)
-    device.submit_command_buffer(command_encoder.finish())
+    tonemap_and_save_texture(device, primal, "./output/primal.png")
 
-    save_img(reference_output.to_numpy(), filename="./output/reference.png")
+
+    adjoint_arr = 2 * (primal.to_numpy() - reference.to_numpy())
+
+    save_img(np.abs(adjoint_arr[:,:,0:3]), "./output/adjoint.png")
+
 
 
 if __name__ == "__main__":

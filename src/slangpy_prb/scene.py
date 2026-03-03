@@ -168,8 +168,8 @@ class SceneMaterialList:
         for material in materials:
             bytes = material.pack_parameters()
 
-            parameter_offsets.append(parameter_size)
             parameter_bytes.extend(bytes)
+            parameter_offsets.append(parameter_size)
             parameter_size += len(parameter_bytes)
 
         parameter_bytes = np.frombuffer(parameter_bytes, dtype=np.uint8).flatten()

@@ -51,7 +51,6 @@ struct Scene {
 
 static const uint max_depth = 8;
 
-
 const uint sample_seed;
 const uint sample_index;
 
@@ -63,6 +62,22 @@ struct Ray {
     float3 direction;
 }
 
+struct HitDesc {
+    float distance;
+    float3x3 tangent_to_world;
+    uint material_index;
+}
+
+struct MissDesc {
+    float3 radiance;
+}
+
+struct RayTraceResponse {
+    bool isHit;
+    HitDesc hit;
+    MissDesc miss;
+}
+
 struct Path {
     float3 position;
     uint rand_state;
@@ -71,29 +86,20 @@ struct Path {
     float3 radiance;
     float3 throughput;
     int depth = 0;
-
-    [mutating]
-    void terminate() {
-        depth = max_depth;
-    }
-
-    bool is_terminated() {
-        return depth >= max_depth || all(direction == float3(0.0));
-    }
 }
 
-
-
 [shader("miss")]
-void miss_primary(inout Path path)
+void miss_primary(inout RayTraceResponse response)
 {
-    float phi = atan2(path.direction.z, path.direction.x) + pi;
-    float theta = acos(path.direction.y);
+    float3 w = WorldRayDirection();
+
+    float phi = atan2(w.z, w.x) + pi;
+    float theta = acos(w.y);
 
     float2 uv = float2(phi / tau, theta / pi);
 
-    path.radiance += path.throughput * scene.environment_map.Sample(scene.environment_sampler, uv);
-    path.terminate();
+    response.isHit = false;
+    response.miss.radiance = scene.environment_map.Sample(scene.environment_sampler, uv);
 }
 
 [shader("miss")]
@@ -101,12 +107,13 @@ void miss_occlusion()
 {}
 
 [shader("closesthit")]
-void closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAttributes attribs)
+void closest_hit_triangle_primary(inout RayTraceResponse response, BuiltInTriangleIntersectionAttributes attribs)
 {
+    HitDesc hit;
+
     uint instance_index = InstanceIndex();
     InstanceDesc instance_desc = scene.instance_descs[instance_index];
     MeshDesc mesh_desc = scene.mesh_descs[instance_desc.mesh_index];
-    MaterialDesc material_desc = scene.material_descs[instance_desc.material_index];
 
     uint primitive_index = PrimitiveIndex();
 
@@ -121,46 +128,21 @@ void closest_hit_triangle_primary(inout Path path, BuiltInTriangleIntersectionAt
     float3 barycentrics = float3(1.0 - attribs.barycentrics.x - attribs.barycentrics.y, attribs.barycentrics.x, attribs.barycentrics.y);
 
     float3 n_object = normalize(barycentrics.x * n0 + barycentrics.y * n1 + barycentrics.z * n2);
-
-    float t = RayTCurrent();
-    float3 p = path.position + t * path.direction;
-
     float3 n = mul(ObjectToWorld(), float4(n_object, 0.0));
 
-    float3x3 tangent_to_world = make_tbn_matrix(n);
-    float3x3 world_to_tangent = transpose(tangent_to_world);
+    hit.distance = RayTCurrent();
+    hit.tangent_to_world = make_tbn_matrix(n);
+    hit.material_index = instance_desc.material_index;
 
-    float3 wo = mul(world_to_tangent, -path.direction);
-
-    BsdfSample bsdf_sample;
-    bsdf_sample.set_parameter_ptr(material_desc.parameters);
-    bsdf_sample.rand_state = path.rand_state;
-    bsdf_sample.error_state = 0;
-    bsdf_sample.wi = wo; // reciprocity
-    bsdf_sample.ior_outside = 1.0; // TODO: keep track of ior's with stack
-
-    CallShader(material_desc.sample_call_index, bsdf_sample);
-
-    if (path.depth == 1 && bsdf_sample.error_state != 0) {
-        path.radiance = float3(10.0, 0.0, 10.0);
-        path.terminate();
-        return;
-    }
-
-    float3 wi = bsdf_sample.wo; // reciprocity
-
-    path.rand_state = bsdf_sample.rand_state;
-    path.throughput *= bsdf_sample.weight;
-    path.depth += 1;
-
-    path.position = p;
-    path.direction = mul(tangent_to_world, wi);
+    response.isHit = true;
+    response.hit = hit;
 }
 
 [shader("anyhit")]
 void any_hit_triangle_occlusion(inout bool occluded) {
     occluded = true;
 }
+
 
 [shader("raygeneration")]
 void ray_gen()
@@ -185,14 +167,12 @@ void ray_gen()
     RayDesc ray;
 
     for (int i = 0; i < max_depth; i++) {
-        if (path.is_terminated()) {
-            break;
-        }
-
         ray.Origin = path.position;
         ray.Direction = path.direction;
         ray.TMin = 1e-3;
         ray.TMax = 1e10;
+
+        RayTraceResponse response;
 
         TraceRay(
             scene.tlas,
@@ -202,8 +182,42 @@ void ray_gen()
             0, /* MultiplierForGeometryContributionHitGroupIndex */
             0, /* MissShaderIndex */
             ray,
-            path,
+            response,
         );
+
+        if (!response.isHit) {
+            path.radiance = path.throughput * response.miss.radiance;
+            break;
+        }
+
+        HitDesc hit = response.hit;
+        MaterialDesc material_desc = scene.material_descs[hit.material_index];
+        
+        float3x3 world_to_tangent = transpose(hit.tangent_to_world);
+        float3 wo = mul(world_to_tangent, -path.direction);
+
+        BsdfSample bsdf_sample;
+        bsdf_sample.set_parameter_ptr(material_desc.parameters);
+        bsdf_sample.rand_state = path.rand_state;
+        bsdf_sample.error_state = 0;
+        bsdf_sample.wi = wo;           // reciprocity
+        bsdf_sample.ior_outside = 1.0; // TODO: keep track of ior's with stack
+
+        CallShader(material_desc.sample_call_index, bsdf_sample);
+
+        if (path.depth == 1 && bsdf_sample.error_state != 0) {
+            path.radiance = float3(10.0, 0.0, 10.0);
+            break;
+        }
+
+        float3 wi = bsdf_sample.wo; // reciprocity
+
+        path.rand_state = bsdf_sample.rand_state;
+        path.throughput *= bsdf_sample.weight;
+        path.depth += 1;
+
+        path.position = path.position + hit.distance * path.direction;
+        path.direction = mul(hit.tangent_to_world, wi);
     }
 
     float3 radiance = render_target[pixel].rgb;
