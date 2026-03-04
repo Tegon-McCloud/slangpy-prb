@@ -7,6 +7,18 @@ __include util.microfacet;
 public static const float pi = float.getPi();
 public static const float tau = 2.0 * float.getPi();
 
+public float3x3 make_tbn_matrix(float3 normal) {
+    float signbit = sign(normal.z + 1.0e-16f);
+    float a = -1.0f / (1.0f + abs(normal.z));
+    float b = normal.x * normal.y * a;
+
+    return transpose(float3x3(
+        float3(1.0f + normal.x * normal.x * a, b, -signbit * normal.x),
+        float3(signbit * b, signbit * (1.0f + normal.y * normal.y * a), -normal.y),
+        normal,
+    ));
+}
+
 public float reflectance_fresnel_real(float cos_theta_i, float cos_theta_t, float ior) {
     float a_ii = ior * cos_theta_i;
     float a_tt = cos_theta_t;

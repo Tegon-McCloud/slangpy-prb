@@ -143,6 +143,28 @@ void any_hit_triangle_occlusion(inout bool occluded) {
     occluded = true;
 }
 
+float3 sample_bsdf(
+    MaterialDesc material_desc,
+    float3 wi,
+    out float3 weight,
+    inout uint rand_state,
+    out uint error_state,
+) {
+    BsdfSample bsdf_sample;
+    bsdf_sample.set_parameter_ptr(material_desc.parameters);
+    bsdf_sample.rand_state = rand_state;
+    bsdf_sample.error_state = 0;
+    bsdf_sample.wi = wi;           // reciprocity
+    bsdf_sample.ior_outside = 1.0; // TODO: keep track of ior's with stack
+
+    CallShader(material_desc.sample_call_index, bsdf_sample);
+
+    weight = bsdf_sample.weight;
+    rand_state = bsdf_sample.rand_state;
+    error_state = bsdf_sample.error_state;
+    
+    return bsdf_sample.wo;
+} 
 
 [shader("raygeneration")]
 void ray_gen()
@@ -196,24 +218,18 @@ void ray_gen()
         float3x3 world_to_tangent = transpose(hit.tangent_to_world);
         float3 wo = mul(world_to_tangent, -path.direction);
 
-        BsdfSample bsdf_sample;
-        bsdf_sample.set_parameter_ptr(material_desc.parameters);
-        bsdf_sample.rand_state = path.rand_state;
-        bsdf_sample.error_state = 0;
-        bsdf_sample.wi = wo;           // reciprocity
-        bsdf_sample.ior_outside = 1.0; // TODO: keep track of ior's with stack
+        float3 bsdf_weight;
+        uint error_state;
 
-        CallShader(material_desc.sample_call_index, bsdf_sample);
+        float3 wi = sample_bsdf(
+            material_desc,
+            wo,
+            bsdf_weight,
+            path.rand_state,
+            error_state,
+        );
 
-        if (path.depth == 1 && bsdf_sample.error_state != 0) {
-            path.radiance = float3(10.0, 0.0, 10.0);
-            break;
-        }
-
-        float3 wi = bsdf_sample.wo; // reciprocity
-
-        path.rand_state = bsdf_sample.rand_state;
-        path.throughput *= bsdf_sample.weight;
+        path.throughput *= bsdf_weight;
         path.depth += 1;
 
         path.position = path.position + hit.distance * path.direction;
@@ -224,22 +240,3 @@ void ray_gen()
     radiance = lerp(radiance, path.radiance, 1.0 / (sample_index + 1.0));
     render_target[pixel] = float4(radiance, 1.0);
 }
-
-[shader("raygen")]
-void ray_gen_adjoint() {
-
-
-}
-
-float3x3 make_tbn_matrix(float3 normal) {
-    float signbit = sign(normal.z + 1.0e-16f);
-    float a = -1.0f / (1.0f + abs(normal.z));
-    float b = normal.x * normal.y * a;
-
-    return transpose(float3x3(
-        float3(1.0f + normal.x * normal.x * a, b, -signbit * normal.x),
-        float3(signbit * b, signbit * (1.0f + normal.y * normal.y * a), -normal.y),
-        normal,
-    ));
-}
-
