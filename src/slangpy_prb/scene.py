@@ -12,7 +12,11 @@ class ShaderTableBuilder:
     ):
         super().__init__()
 
+        self.module_paths: set[str] = set()
         self.callable_entries: list[str] = []
+    
+    def add_module(self, module_path: str):
+        self.module_paths.add(module_path)
 
     def add_callable(self, entry_point_name: str) -> int:
         index = len(self.callable_entries)
@@ -38,7 +42,7 @@ class SceneMeshList:
     def __init__(
         self,
         device: spy.Device,
-        meshes: list[Mesh]        
+        meshes: list[Mesh],
     ):
         super().__init__()
         
@@ -136,21 +140,25 @@ class SceneMeshList:
 
         device.submit_command_buffer(command_encoder.finish())
 
-
-
 class SceneMaterialList:
     @dataclass
     class MaterialDesc:
         evaluate_call_index: int
         sample_call_index: int
+        backpropagate_call_index: int
+        requires_grad: int
         parameter_address: int
+        gradient_address: int
 
         def pack(self) -> bytes:
             return struct.pack(
-                "IIQ",
+                "IIIIQQ",
                 self.evaluate_call_index,
                 self.sample_call_index,
+                self.backpropagate_call_index,
+                self.requires_grad,
                 self.parameter_address,
+                self.gradient_address,
             )
 
     def __init__(
@@ -165,6 +173,9 @@ class SceneMaterialList:
         parameter_offsets: list[int] = []
         parameter_size = 0
 
+        gradient_offsets: list[int] = []
+        gradient_size = 0
+
         for material in materials:
             bytes = material.pack_parameters()
 
@@ -172,26 +183,56 @@ class SceneMaterialList:
             parameter_offsets.append(parameter_size)
             parameter_size += len(parameter_bytes)
 
+            gradient_offsets.append(gradient_size)
+            if material.requires_grad:
+                gradient_size += len(parameter_bytes)
+
         parameter_bytes = np.frombuffer(parameter_bytes, dtype=np.uint8).flatten()
-        
+
         self.parameter_buffer = self.device.create_buffer(
+            data=parameter_bytes,
             usage=spy.BufferUsage.shader_resource,
             label="parameter_buffer",
-            data=parameter_bytes,
         )
+
+        if gradient_size > 0:
+            self.gradient_buffer = self.device.create_buffer(
+                size=gradient_size,
+                usage=spy.BufferUsage.shader_resource | spy.BufferUsage.unordered_access,
+                label="gradient_buffer",
+            )
+        else:
+            self.gradient_buffer = None
         
         self.material_descs: list[SceneMaterialList.MaterialDesc] = []
 
-        for material, parameter_offset in zip(materials, parameter_offsets):
+        for material, parameter_offset, gradient_offset in zip(materials, parameter_offsets, gradient_offsets):
             evaluate_call_index = shader_table_builder.add_callable(material.evaluate_entry_point)
             sample_call_index = shader_table_builder.add_callable(material.sample_entry_point)
+
+            if material.requires_grad:
+                backpropagate_call_index = shader_table_builder.add_callable(material.backpropagate_entry_point)
+                requires_grad = 1
+
+                if self.gradient_buffer != None:
+                    gradient_address = self.gradient_buffer.device_address + gradient_offset 
+                else:
+                    gradient_address = 0
+
+            else:
+                backpropagate_call_index = 0xffffffff
+                requires_grad = 0
+                gradient_address = 0
 
             self.material_descs.append(SceneMaterialList.MaterialDesc(
                 evaluate_call_index=evaluate_call_index,
                 sample_call_index=sample_call_index,
+                backpropagate_call_index=backpropagate_call_index,
+                requires_grad=requires_grad,
                 parameter_address=self.parameter_buffer.device_address + parameter_offset,
+                gradient_address=gradient_address,
             ))
-        
+
         material_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.material_descs), dtype=np.uint8).flatten()
 
         self.material_descs_buffer = device.create_buffer(
@@ -221,6 +262,10 @@ class Scene:
     ):
         super().__init__()
         self.device = device
+
+        shader_table_builder.add_module("shaders/triangle.slang")
+        shader_table_builder.add_module("shaders/bsdf.slang")
+        shader_table_builder.add_module("shaders/environment.slang")
 
         self.meshes = SceneMeshList(self.device, stage.meshes)
         self.materials = SceneMaterialList(self.device, stage.materials, shader_table_builder)
@@ -284,7 +329,6 @@ class Scene:
 
         self.camera = stage.camera
 
-
     def bind(self, cursor: spy.ShaderCursor):
         cursor.tlas = self.tlas
         cursor.environment_map = self.environment_texture
@@ -297,5 +341,18 @@ class Scene:
         cursor.material_descs = self.materials.material_descs_buffer
 
         cursor.instance_descs = self.instance_descs_buffer
+        
+        if self.materials.parameter_buffer != None:
+            cursor.material_parameters = self.materials.parameter_buffer
+
+        if self.materials.gradient_buffer != None:
+            cursor.material_gradients = self.materials.gradient_buffer
 
         self.camera.bind(cursor.camera)
+
+    def zero_grad(self, command_encoder: spy.CommandEncoder):
+        command_encoder.clear_buffer(self.materials.gradient_buffer)
+
+
+
+

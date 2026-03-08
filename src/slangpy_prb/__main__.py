@@ -19,13 +19,9 @@ class PathTracer:
 
         self.device = device
 
-        module_names = [
-            path.name
-            for path in pathlib.Path("./shaders").iterdir()
-            if path.is_file()
-        ]
-
-        modules = [device.load_module(name) for name in module_names]
+        module_paths = set(shader_table_builder.module_paths)
+        module_paths.add("shaders/path_trace.slang")
+        modules = [device.load_module(path) for path in module_paths]
 
         entry_points = [
             entry_point
@@ -37,7 +33,7 @@ class PathTracer:
                 spy.ShaderStage.closest_hit,
                 spy.ShaderStage.any_hit,
                 spy.ShaderStage.intersection,
-                spy.ShaderStage.callable,    
+                spy.ShaderStage.callable,
             ]
         ]
 
@@ -66,7 +62,7 @@ class PathTracer:
         self,
         command_encoder: spy.CommandEncoder,
         scene: Scene,
-        render_target: Scene,
+        render_target: spy.Texture,
         sample_index: int,
     ):
 
@@ -80,6 +76,75 @@ class PathTracer:
             scene.bind(cursor.scene)
 
             pass_encoder.dispatch_rays(0, [render_target.width, render_target.height, 1])
+
+class ReplayBackpropagater:
+    def __init__(
+        self,
+        device: spy.Device,
+        shader_table_builder: ShaderTableBuilder,
+    ):
+        super().__init__()
+
+        self.device = device
+
+        module_paths = set(shader_table_builder.module_paths)
+        module_paths.add("shaders/backpropagate_replay.slang")
+        modules = [device.load_module(path) for path in module_paths]
+
+        entry_points = [
+            entry_point
+            for module in modules
+            for entry_point in module.entry_points
+            if entry_point.stage in [
+                spy.ShaderStage.ray_generation,
+                spy.ShaderStage.miss,
+                spy.ShaderStage.closest_hit,
+                spy.ShaderStage.any_hit,
+                spy.ShaderStage.intersection,
+                spy.ShaderStage.callable,
+            ]
+        ]
+
+        program = device.link_program(modules=modules, entry_points=entry_points)
+
+        self.pipeline = device.create_ray_tracing_pipeline(
+            program=program,
+            hit_groups=[
+                spy.HitGroupDesc(hit_group_name="triangle_primary", closest_hit_entry_point="closest_hit_triangle_primary"),
+                spy.HitGroupDesc(hit_group_name="triangle_occlusion", any_hit_entry_point="any_hit_triangle_occlusion")
+            ],
+            max_recursion=2,
+            max_ray_payload_size=64,
+        )
+
+        self.shader_table = device.create_shader_table(
+            program=program,
+            ray_gen_entry_points=["ray_gen"],
+            miss_entry_points=["miss_primary", "miss_occlusion"],
+            hit_group_names=["triangle_primary", "triangle_occlusion"],
+            callable_entry_points=shader_table_builder.callable_entries
+        )
+
+    def sample(
+        self,
+        command_encoder: spy.CommandEncoder,
+        scene: Scene,
+        adjoint: spy.Texture,
+        sample_count: int,
+    ):
+
+        with command_encoder.begin_ray_tracing_pass() as pass_encoder:
+            shader_object = pass_encoder.bind_pipeline(self.pipeline, self.shader_table)
+            cursor = spy.ShaderCursor(shader_object)
+
+            cursor.sample_seed = random.getrandbits(32)
+            cursor.sample_count = sample_count
+            cursor.adjoint = adjoint
+            scene.bind(cursor.scene)
+
+            pass_encoder.dispatch_rays(0, [adjoint.width, adjoint.height, 1])
+
+
 
 class Tonemapper:
 
@@ -110,9 +175,15 @@ class Tonemapper:
         )
 
 
-def render(device: spy.Device, scene: Scene, path_tracer: PathTracer, width: int, height: int, sample_count: int, seed: int) -> spy.Texture:
-
-
+def render(
+    device: spy.Device,
+    scene: Scene,
+    path_tracer: PathTracer,
+    width: int,
+    height: int,
+    sample_count: int,
+    seed: int,
+) -> spy.Texture:
     random.seed(seed)
 
     render_target = device.create_texture(
@@ -138,14 +209,38 @@ def render(device: spy.Device, scene: Scene, path_tracer: PathTracer, width: int
 
     return render_target
 
+def backpropagate(
+    device: spy.Device,
+    scene: Scene,
+    adjoint: spy.Texture,
+    backpropagater: ReplayBackpropagater,
+    sample_count: int,
+    seed: int,
+):
+    random.seed(seed)
+
+    for _ in tqdm(range(sample_count)):
+        command_encoder = device.create_command_encoder()
+
+        backpropagater.sample(
+            command_encoder,
+            scene,
+            adjoint,
+            sample_count,
+        )
+        
+        submit_id = device.submit_command_buffer(command_encoder.finish())
+        device.wait_for_submit(submit_id)
+
+
+
 def save_img(img: npt.NDArray, filename: str):
     img = np.clip(img, 0.0, 1.0)
     img = (img * 255).astype(np.uint8)
     
     Image.fromarray(img).save(filename) 
 
-def tonemap_and_save_texture(device: spy.Device, texture: spy.Texture, filename: str):
-
+def tonemap(device: spy.Device, texture: spy.Texture) -> spy.Texture:
     tonemapper = Tonemapper(device)
     output = device.create_texture(
         format=spy.Format.rgba32_float,
@@ -159,7 +254,7 @@ def tonemap_and_save_texture(device: spy.Device, texture: spy.Texture, filename:
     tonemapper.tonemap(command_encoder, texture, output)
     device.submit_command_buffer(command_encoder.finish())
 
-    save_img(output.to_numpy(), filename=filename)
+    return output
 
 def main():
 
@@ -199,14 +294,14 @@ def main():
         seed=1234,
     )
 
-    tonemap_and_save_texture(device, reference, "./output/reference.png")
+    save_img(tonemap(device, reference).to_numpy(), "./output/reference.png")
 
-    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.5, 0.5, 0.5)))
+    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.5, 0.5, 0.5), requires_grad=True))
     
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
-    path_tracer = PathTracer(device, shader_table_builder)
 
+    path_tracer = PathTracer(device, shader_table_builder)
     primal = render(
         device,
         scene,
@@ -214,17 +309,42 @@ def main():
         width,
         height,
         sample_count=1 << 10,
-        seed=1233, 
+        seed=1235,
     )
 
-    tonemap_and_save_texture(device, primal, "./output/primal.png")
+    save_img(tonemap(device, primal).to_numpy(), "./output/primal.png")
 
+    reference_arr = reference.to_numpy()
+    primal_arr = primal.to_numpy()
 
-    adjoint_arr = 2 * (primal.to_numpy() - reference.to_numpy())
+    loss = np.mean((primal_arr - reference_arr)**2)
+    print(f"loss: {loss}")
 
-    save_img(np.abs(adjoint_arr[:,:,0:3]), "./output/adjoint.png")
+    adjoint_arr = 2 * (primal.to_numpy() - reference.to_numpy()) / (width * height)
+    adjoint = device.create_texture(
+        data=adjoint_arr,
+        format=spy.Format.rgba32_float,
+        width=width,
+        height=height,
+        usage=spy.TextureUsage.shader_resource,
+        label="adjoint",
+    )
 
+    save_img(width * height * adjoint_arr[:,:,0:3], "./output/adjoint.png")
 
+    backpropagater = ReplayBackpropagater(device, shader_table_builder)
+    
+    backpropagate(
+        device,
+        scene,
+        adjoint,
+        backpropagater,
+        sample_count=1 << 10,
+        seed=1236
+    )
+
+    gradient = scene.materials.gradient_buffer.to_numpy().view(np.float32)
+    print(f"gradient: {gradient}")
 
 if __name__ == "__main__":
     main()

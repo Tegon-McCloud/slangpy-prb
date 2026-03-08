@@ -7,11 +7,15 @@ class Material:
         self,
         evaluate_entry_point: str,
         sample_entry_point: str,
+        backpropagate_entry_point: str = "",
+        requires_grad: bool = False,
     ):
         super().__init__()
 
         self.evaluate_entry_point = evaluate_entry_point
         self.sample_entry_point = sample_entry_point
+        self.backpropagate_entry_point = backpropagate_entry_point
+        self.requires_grad = requires_grad
 
     def pack_parameters(self) -> bytes: ...
 
@@ -19,10 +23,13 @@ class LambertianMaterial(Material):
     def __init__(
         self,
         color: spy.float3,
+        requires_grad: bool = False,
     ):
         super().__init__(
             evaluate_entry_point="call_evaluate_lambertian",
             sample_entry_point="call_sample_lambertian",
+            backpropagate_entry_point="call_backpropagate_lambertian",
+            requires_grad=requires_grad,
         )
 
         self.color = color
