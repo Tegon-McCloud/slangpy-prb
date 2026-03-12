@@ -38,6 +38,33 @@ RayTraceResponse trace_ray(Ray ray, float tmin, float tmax) {
     return response;
 }
 
+float3 sample_dumb(
+    MaterialDesc material_desc,
+    float3 wo,
+    out float3 value,
+    out float pdf,
+    inout uint rand_state,
+    out uint error_state,
+) {
+    float3 wi = sample_sphere(rand_state);
+    pdf = 1.0 / (4.0 * pi);
+
+    BsdfEvaluation e;
+    e.set_parameter_ptr(material_desc.parameters);
+    e.rand_state = rand_state;
+    e.wo = wo;
+    e.wi = wi;
+
+    CallShader(material_desc.evaluate_call_index, e);
+
+    value = e.value;
+    rand_state = e.rand_state;
+    error_state = 0;
+
+    return wi;
+}
+
+
 float3 sample_bsdf(
     MaterialDesc material_desc,
     float3 wo,

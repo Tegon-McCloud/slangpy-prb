@@ -37,3 +37,27 @@ public float3 sample_cosine_hemisphere(inout uint rand_state) {
         cos_theta
     );
 }
+
+public float3 sample_sphere(inout uint rand_state) {
+    float cos_theta = 2.0 * rnd(rand_state) - 1.0;
+    float sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+    float phi = 2.0 * pi * rnd(rand_state);
+
+    return float3(
+        sin_theta * cos(phi),
+        sin_theta * sin(phi),
+        cos_theta,
+    );
+}
+
+public float3 sample_hemisphere(inout uint rand_state) {
+    float cos_theta = rnd(rand_state);
+    float sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+    float phi = 2.0 * pi * rnd(rand_state);
+
+    return float3(
+        sin_theta * cos(phi),
+        sin_theta * sin(phi),
+        cos_theta,
+    );
+}

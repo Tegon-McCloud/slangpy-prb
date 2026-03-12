@@ -131,7 +131,7 @@ void sample_path_adjoint(Ray ray, float3 radiance, float3 adjoint_radiance, inou
             error_state,
         );
 
-        if (material_desc.requires_grad != 0) { 
+        if (material_desc.requires_grad != 0) {
 
             BsdfBackpropagation b;
             b.set_parameter_ptr(material_desc.parameters);

@@ -28,6 +28,12 @@ public struct RayTraceResponse {
     public MissDesc miss;
 }
 
+[ForceInline]
+[Differentiable]
+public float sq(float x) {
+    return x * x;
+}
+
 public float3x3 make_tbn_matrix(float3 normal) {
     float signbit = sign(normal.z + 1.0e-16f);
     float a = -1.0f / (1.0f + abs(normal.z));
@@ -40,6 +46,7 @@ public float3x3 make_tbn_matrix(float3 normal) {
     ));
 }
 
+[Differentiable]
 public float reflectance_fresnel_real(float cos_theta_i, float cos_theta_t, float ior) {
     float a_ii = ior * cos_theta_i;
     float a_tt = cos_theta_t;

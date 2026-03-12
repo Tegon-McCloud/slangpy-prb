@@ -21,6 +21,7 @@ class PathTracer:
 
         module_paths = set(shader_table_builder.module_paths)
         module_paths.add("shaders/path_trace.slang")
+
         modules = [device.load_module(path) for path in module_paths]
 
         entry_points = [
@@ -182,9 +183,11 @@ def render(
     width: int,
     height: int,
     sample_count: int,
-    seed: int,
+    seed: int | None = None,
 ) -> spy.Texture:
-    random.seed(seed)
+    
+    if seed != None:
+        random.seed(seed)
 
     render_target = device.create_texture(
         format=spy.Format.rgba32_float,
@@ -215,9 +218,10 @@ def backpropagate(
     adjoint: spy.Texture,
     backpropagater: ReplayBackpropagater,
     sample_count: int,
-    seed: int,
+    seed: int | None = None,
 ):
-    random.seed(seed)
+    if seed != None:
+        random.seed(seed)
 
     for _ in tqdm(range(sample_count)):
         command_encoder = device.create_command_encoder()
@@ -257,7 +261,6 @@ def tonemap(device: spy.Device, texture: spy.Texture) -> spy.Texture:
     return output
 
 def main():
-
     device = spy.create_device(
         include_paths=[pathlib.Path("./shaders")],
         enable_debug_layers=True,
@@ -265,8 +268,8 @@ def main():
         type=spy.DeviceType.vulkan,
     )
 
-    width = 1920
-    height = 1080
+    width = 960
+    height = 540
 
     stage = Stage(
         environment=spy.Bitmap.load_from_file("./assets/kloppenheim_06_puresky_4k.hdr"),
@@ -274,11 +277,11 @@ def main():
 
     stage.load_gltf("./assets/XYZRGBDragon.glb")
 
-    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.8, 0.2, 0.2)))
+    # stage.replace_material(0, LambertianMaterial(color=spy.float3(0.8, 0.2, 0.2)))
     # stage.replace_material(0, SpecularConductorMaterial.cobalt())
     # stage.replace_material(0, SpecularDielectricMaterial(ior=1.5))
     # stage.replace_material(0, MicrofacetConductorMaterial.gold(roughness=0.4))
-    # stage.replace_material(0, MicrofacetDielectricMaterial(roughness=0.4, ior=1.5))
+    stage.replace_material(0, MicrofacetDielectricMaterial(roughness=0.4, ior=1.5))
 
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
@@ -296,55 +299,71 @@ def main():
 
     save_img(tonemap(device, reference).to_numpy(), "./output/reference.png")
 
-    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.5, 0.5, 0.5), requires_grad=True))
-    
+    # stage.replace_material(0, LambertianMaterial(color=spy.float3(0.5, 0.5, 0.5), requires_grad=True))
+    stage.replace_material(0, MicrofacetDielectricMaterial(roughness=0.9, ior=1.5, requires_grad=True))
+
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
 
     path_tracer = PathTracer(device, shader_table_builder)
-    primal = render(
-        device,
-        scene,
-        path_tracer,
-        width,
-        height,
-        sample_count=1 << 10,
-        seed=1235,
-    )
-
-    save_img(tonemap(device, primal).to_numpy(), "./output/primal.png")
-
-    reference_arr = reference.to_numpy()
-    primal_arr = primal.to_numpy()
-
-    loss = np.mean((primal_arr - reference_arr)**2)
-    print(f"loss: {loss}")
-
-    adjoint_arr = 2 * (primal.to_numpy() - reference.to_numpy()) / (width * height)
-    adjoint = device.create_texture(
-        data=adjoint_arr,
-        format=spy.Format.rgba32_float,
-        width=width,
-        height=height,
-        usage=spy.TextureUsage.shader_resource,
-        label="adjoint",
-    )
-
-    save_img(width * height * adjoint_arr[:,:,0:3], "./output/adjoint.png")
-
     backpropagater = ReplayBackpropagater(device, shader_table_builder)
     
-    backpropagate(
-        device,
-        scene,
-        adjoint,
-        backpropagater,
-        sample_count=1 << 10,
-        seed=1236
-    )
+    for iteration in range(25):
 
-    gradient = scene.materials.gradient_buffer.to_numpy().view(np.float32)
-    print(f"gradient: {gradient}")
+        primal = render(
+            device,
+            scene,
+            path_tracer,
+            width,
+            height,
+            sample_count=1 << 10,
+        )
+
+        save_img(tonemap(device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
+
+        reference_arr = reference.to_numpy()
+        primal_arr = primal.to_numpy()
+
+        loss = np.mean((primal_arr - reference_arr)**2)
+        print(f"loss: {loss}")
+
+        adjoint_arr = 2 * (primal.to_numpy() - reference.to_numpy()) / (width * height)
+        adjoint = device.create_texture(
+            data=adjoint_arr,
+            format=spy.Format.rgba32_float,
+            width=width,
+            height=height,
+            usage=spy.TextureUsage.shader_resource,
+            label="adjoint",
+        )
+
+        command_encoder = device.create_command_encoder()
+        scene.zero_grad(command_encoder)
+        device.submit_command_buffer(command_encoder.finish())
+
+        save_img(width * height * adjoint_arr[:,:,0:3], f"./output/adjoint_{iteration:02}.png")
+
+        backpropagate(
+            device,
+            scene,
+            adjoint,
+            backpropagater,
+            sample_count=1 << 10,
+        )
+
+        gradient = scene.materials.gradient_buffer.to_numpy().view(np.float32)
+        value = scene.materials.parameter_buffer.to_numpy().view(np.float32)
+
+        print(f"gradient: {gradient}")
+        print(f"value: {value}")
+
+        value[0:gradient.shape[0]] -= 0.05 * gradient
+
+        scene.materials.parameter_buffer.copy_from_numpy(value)
+
+    scene.download()
+    print(stage.materials[0].roughness)
+
 
 if __name__ == "__main__":
     main()

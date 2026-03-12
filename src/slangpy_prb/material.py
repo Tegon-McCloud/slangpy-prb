@@ -5,6 +5,7 @@ import slangpy as spy
 class Material:
     def __init__(
         self,
+        parameter_struct: struct.Struct,
         evaluate_entry_point: str,
         sample_entry_point: str,
         backpropagate_entry_point: str = "",
@@ -12,12 +13,14 @@ class Material:
     ):
         super().__init__()
 
+        self.parameter_struct = parameter_struct
         self.evaluate_entry_point = evaluate_entry_point
         self.sample_entry_point = sample_entry_point
         self.backpropagate_entry_point = backpropagate_entry_point
         self.requires_grad = requires_grad
 
     def pack_parameters(self) -> bytes: ...
+    def unpack_parameters(self, parameter_bytes: bytes): ...
 
 class LambertianMaterial(Material):
     def __init__(
@@ -26,6 +29,7 @@ class LambertianMaterial(Material):
         requires_grad: bool = False,
     ):
         super().__init__(
+            parameter_struct=struct.Struct("fff"),
             evaluate_entry_point="call_evaluate_lambertian",
             sample_entry_point="call_sample_lambertian",
             backpropagate_entry_point="call_backpropagate_lambertian",
@@ -35,12 +39,15 @@ class LambertianMaterial(Material):
         self.color = color
 
     def pack_parameters(self) -> bytes:
-        return struct.pack(
-            "fff",
+        return self.parameter_struct.pack(
             self.color.x,
             self.color.y,
             self.color.z,
         )
+    
+    def unpack_parameters(self, parameters: bytes):
+        self.color.x, self.color.y, self.color.z = self.parameter_struct.unpack(parameters)
+
 
 class SpecularConductorMaterial(Material):
     def __init__(
@@ -203,18 +210,24 @@ class MicrofacetDielectricMaterial(Material):
         self,
         ior: float,
         roughness: float,
+        requires_grad: bool = False,
     ):
         super().__init__(
+            parameter_struct=struct.Struct("ff"),
             evaluate_entry_point="call_evaluate_microfacet_dielectric_ss",
             sample_entry_point="call_sample_microfacet_dielectric_ss",
+            backpropagate_entry_point="call_backpropagate_microfacet_dielectric_ss",
+            requires_grad=requires_grad,
         )
 
         self.ior = ior
         self.roughness = roughness
 
     def pack_parameters(self) -> bytes:
-        return struct.pack(
-            "ff",
+        return self.parameter_struct.pack(
             self.ior,
             self.roughness,
         )
+    
+    def unpack_parameters(self, parameter_bytes: bytes):
+        self.ior, self.roughness = self.parameter_struct.unpack(parameter_bytes)

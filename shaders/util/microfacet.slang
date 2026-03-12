@@ -12,21 +12,38 @@ public float3 sample_vndf_std_ggx(float3 w, inout uint rand_state) {
     return w + float3(x, y, z);
 }
 
-public float3 sample_vndf_ggx(float3 w, float alpha, inout uint rand_state) {
+public float3 sample_vndf_ggx(float3 w, float2 alpha, inout uint rand_state) {
     float3 w_std = normalize(float3(w.xy * alpha, w.z));
     float3 wm_std = sample_vndf_std_ggx(w_std, rand_state);
 
     return normalize(float3(wm_std.xy * alpha, wm_std.z));
 }
 
-public float lambda_ggx(float cos_theta, float alpha_sq) {
-    float cos_theta_sq = cos_theta * cos_theta;
-    float sin_theta_sq = max(1.0 - cos_theta_sq, 0.0);
-    float tan_theta_sq = sin_theta_sq / cos_theta_sq;
+[Differentiable]
+public float ndf_ggx(float3 wm, float2 alpha) {
+    float a = (wm.x  * wm.x) / (alpha.x * alpha.x)
+        + (wm.y * wm.y) / (alpha.y * alpha.y)
+        + wm.z * wm.z;
 
-    return 0.5 * (sign(cos_theta) * sqrt(1.0 + alpha_sq * tan_theta_sq) - 1.0);
+    return 1.0 / (pi * alpha.x * alpha.y * sq(a));
 }
 
-public float masking_ggx(float cos_theta, float alpha) {
-    return 1.0 / (1.0 + lambda_ggx(cos_theta, alpha * alpha));
+public float vndf_ggx(float3 w, float3 wm, float2 alpha) {
+    return masking_ggx(w, alpha) * ndf_ggx(wm, alpha) * max(0.0, dot(w, wm)) / w.z;
+}
+
+[Differentiable]
+public float lambda_ggx(float3 w, float2 alpha) {
+    float a = (sq(alpha.x * w.x) + sq(alpha.y * w.y)) / sq(w.z);
+    return 0.5 * (sqrt(1.0 + a) - 1.0);
+}
+
+[Differentiable]
+public float masking_ggx(float3 w, float2 alpha) {
+    return 1.0 / (1.0 + lambda_ggx(w, alpha));
+}
+
+[Differentiable]
+public float masking_shadowing_ggx(float3 wo, float3 wi, float2 alpha) {
+    return 1.0 / (1.0 + lambda_ggx(wo, alpha) + lambda_ggx(wi, alpha));
 }
