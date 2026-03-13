@@ -9,6 +9,8 @@ const uint sample_count;
 
 Texture2D<float4> adjoint;
 
+RWTexture2D<float4> error_target;
+
 RayTraceResponse trace_ray(Ray ray, float tmin, float tmax) {
     RayDesc ray_desc;
 
@@ -58,13 +60,12 @@ float3 sample_bsdf(
     return bsdf_sample.wi;
 }
 
-float3 sample_path(Ray ray, inout uint rand_state) {
+float3 sample_path(Ray ray, inout uint rand_state, out uint depth) {
 
     float3 radiance = float3(0.0);
     float3 throughput = float3(1.0);
 
-    for (int i = 0; i < max_depth; i++) {
-
+    for (depth = 0; depth < max_depth; depth++) {
         RayTraceResponse response = trace_ray(ray, 1e-3, 1e10);
 
         if (!response.isHit) {
@@ -100,12 +101,12 @@ float3 sample_path(Ray ray, inout uint rand_state) {
     return radiance;
 }
 
-void sample_path_adjoint(Ray ray, float3 radiance, float3 adjoint_radiance, inout uint rand_state) {
+void sample_path_adjoint(Ray ray, float3 radiance, float3 adjoint_radiance, inout uint rand_state, out uint depth) {
 
     float3 throughput = float3(1.0);
 
-    for (int i = 0; i < max_depth; i++) {
-
+    for (depth = 0; depth < max_depth; depth++) {
+        
         RayTraceResponse response = trace_ray(ray, 1e-3, 1e10);
 
         if (!response.isHit) {
@@ -163,10 +164,24 @@ void ray_gen()
     
     float2 uv = (float2(pixel) + float2(rnd(rand_state), rnd(rand_state))) / float2(dim);
     Ray camera_ray = scene.camera.getRay(uv);
-    
-    float3 radiance = sample_path(camera_ray, rand_state);
+
+    uint primary_depth;
+    float3 radiance = sample_path(camera_ray, rand_state, primary_depth);
     float3 adjoint_radiance = adjoint[pixel].rgb / sample_count;
 
+    if (any(isnan(radiance)) || !all(isfinite(radiance))) {
+        return;
+    }
+
     rand_state = path_seed;
-    sample_path_adjoint(camera_ray, radiance, adjoint_radiance, rand_state);
+
+    uv = (float2(pixel) + float2(rnd(rand_state), rnd(rand_state))) / float2(dim);
+    camera_ray = scene.camera.getRay(uv);
+    
+    uint adjoint_depth;
+    sample_path_adjoint(camera_ray, radiance, adjoint_radiance, rand_state, adjoint_depth);
+
+    if (primary_depth != adjoint_depth) {
+        error_target[pixel] = float4(1.0, 0.0, 1.0, 1.0);
+    }
 }

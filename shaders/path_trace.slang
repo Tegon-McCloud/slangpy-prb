@@ -139,7 +139,6 @@ void ray_gen()
     uint2 dim = DispatchRaysDimensions().xy;
 
     uint tid = pixel.y * dim.x + pixel.x;
-
     uint rand_state = combine_seeds(sample_seed, tid);
 
     float2 uv = (float2(pixel) + float2(rnd(rand_state), rnd(rand_state))) / float2(dim);
@@ -147,7 +146,7 @@ void ray_gen()
 
     float3 sample = sample_path(camera_ray, rand_state);
 
-    if (any(isnan(sample))) {
+    if (any(isnan(sample)) || !all(isfinite(sample))) {
         sample = float3(0.0);
     }
 
@@ -156,6 +155,6 @@ void ray_gen()
         sample,
         1.0 / (sample_index + 1.0),
     );
-    
+
     render_target[pixel] = float4(avg, 1.0);
 }

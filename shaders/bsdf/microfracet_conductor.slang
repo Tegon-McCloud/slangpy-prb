@@ -6,36 +6,115 @@ struct MicrofacetConductorParameters {
     float roughness;
 }
 
+struct MicrofacetConductorGradients {
+    Atomic<float> ior_r;
+    Atomic<float> ior_g;
+    Atomic<float> ior_b;
+
+    Atomic<float> extinction_r;
+    Atomic<float> extinction_g;
+    Atomic<float> extinction_b;
+
+    Atomic<float> roughness;
+}
+
+
+[Differentiable]
+float3 evaluate_microfacet_conductor_ss(
+    no_diff float3 wo,
+    no_diff float3 wi,
+    float3 ior,
+    float3 extinction,
+    float roughness,
+)
+{
+    if (wo.z * wi.z < 0.0) {
+        return float3(0.0);
+    }
+
+    float2 alpha = float2(roughness * roughness);
+
+    float3 wm = normalize(wi + wo);
+    if (wm.z < 0.0) {
+        wm = -wm;
+    }
+
+    float cos_theta_om = dot(wo, wm);
+    float3 reflectance;
+
+    for (int i = 0; i < 3; i++) {
+        Complex ior_t = Complex(ior[i], extinction[i]);
+        Complex ior = 1.0 / ior_t;
+
+        reflectance[i] = reflectance_fresnel_complex(abs(cos_theta_om), ior);
+    }
+
+    return reflectance * ndf_ggx(wm, alpha) * masking_shadowing_ggx(wo, wi, alpha) / (4.0 * abs(wo.z));
+}
+
+float3 sample_microfacet_conductor_ss(
+    float3 wo,
+    out float3 wi,
+    out float pdf,
+    inout uint rand_state,
+    float3 ior,
+    float3 extinction,
+    float roughness,
+) {
+    float alpha = roughness *roughness;
+
+    float ior_i = 1.0;
+
+    float3 wm = sample_vndf_ggx(wo, alpha, rand_state);
+    float cos_theta_om = dot(wo, wm);
+
+    wi = 2.0 * cos_theta_om * wm - wo;
+
+    float3 reflectance;
+    for (int i = 0; i < 3; i++) {
+        Complex ior_t = Complex(ior[i], extinction[i]);
+        Complex ior = ior_i / ior_t;
+
+        reflectance[i] = reflectance_fresnel_complex(cos_theta_om, ior);
+    }
+
+    pdf = vndf_ggx(wo, wm, alpha)  / (4.0 * cos_theta_om);
+    return reflectance * ndf_ggx(wm, alpha) * masking_shadowing_ggx(wo, wi, alpha) / (4.0 * abs(wo.z));
+}
+
 [shader("callable")]
 void call_evaluate_microfacet_conductor_ss(inout BsdfEvaluation e)
 {
     MicrofacetConductorParameters parameters = e.get_parameters<MicrofacetConductorParameters>();
+    e.value = evaluate_microfacet_conductor_ss(e.wo, e.wi, parameters.ior, parameters.extinction, parameters.roughness);
 }
 
 [shader("callable")]
 void call_sample_microfacet_conductor_ss(inout BsdfSample s)
 {
     MicrofacetConductorParameters parameters = s.get_parameters<MicrofacetConductorParameters>();
-    float alpha = parameters.roughness * parameters.roughness;
-    float3 wi = s.wi;
+    s.value = sample_microfacet_conductor_ss(s.wo, s.wi, s.pdf, s.rand_state, parameters.ior, parameters.extinction, parameters.roughness);
+}
 
-    float ior_i = s.ior_outside;
+[shader("callable")]
+void call_backpropagate_microfacet_conductor_ss(inout BsdfBackpropagation b)
+{
+    MicrofacetConductorParameters parameters = b.get_parameters<MicrofacetConductorParameters>();
+    Ptr<MicrofacetConductorGradients, Access.ReadWrite, AddressSpace.Device> gradients = b.get_gradients<MicrofacetConductorGradients>();
+
+    DifferentialPair<float3> dp_ior = diffPair(parameters.ior);
+    DifferentialPair<float3> dp_extinction = diffPair(parameters.extinction); 
+    DifferentialPair<float> dp_roughness = diffPair(parameters.roughness);
+
+    bwd_diff(evaluate_microfacet_conductor_ss)(b.wo, b.wi, dp_ior, dp_extinction, dp_roughness, b.weight);
+
+    gradients.ior_r.add(dp_ior.d.r);
+    gradients.ior_g.add(dp_ior.d.g);
+    gradients.ior_b.add(dp_ior.d.b);
     
-    float3 wm = sample_vndf_ggx(wi, alpha, s.rand_state);
-    float cos_theta_im = dot(wi, wm);
+    gradients.extinction_r.add(dp_extinction.d.r);
+    gradients.extinction_g.add(dp_extinction.d.g);
+    gradients.extinction_b.add(dp_extinction.d.b);
 
-    float3 wo = 2.0 * cos_theta_im * wm - wi;
-
-    float3 reflectance;
-    for (int i = 0; i < 3; i++) {
-        Complex ior_t = Complex(parameters.ior[i], parameters.extinction[i]);
-        Complex ior = ior_i / ior_t;
-
-        reflectance[i] = reflectance_fresnel_complex(cos_theta_im, ior);
-    }
-
-    float geometry = masking_ggx(abs(wo.z), alpha);
-
-    s.wo = wo;
-    s.weight = reflectance * geometry;
+    gradients.roughness.add(dp_roughness.d);
 }

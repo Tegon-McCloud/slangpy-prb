@@ -254,7 +254,7 @@ class MaterialList:
             begin = desc.parameter_address - parameter_start
             end = begin + material.parameter_struct.size
 
-            material.unpack_parameters(parameters[begin:end].tobytes())        
+            material.unpack_parameters(parameters[begin:end].tobytes())
 
 
 
@@ -377,6 +377,3 @@ class Scene:
 
     def download(self):
         self.materials.download()
-
-
-

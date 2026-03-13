@@ -142,10 +142,14 @@ class MicrofacetConductorMaterial(Material):
         ior: spy.float3,
         extinction: spy.float3,
         roughness: float,
+        requires_grad: bool = False,
     ):
         super().__init__(
+            parameter_struct=struct.Struct("fffffff"),
             evaluate_entry_point="call_evaluate_microfacet_conductor_ss",
             sample_entry_point="call_sample_microfacet_conductor_ss",
+            backpropagate_entry_point="call_backpropagate_microfacet_conductor_ss",
+            requires_grad=requires_grad,
         )
 
         self.ior = ior
@@ -153,48 +157,52 @@ class MicrofacetConductorMaterial(Material):
         self.roughness = roughness
 
     @staticmethod
-    def copper(roughness: float) -> 'MicrofacetConductorMaterial':
+    def copper(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
         return MicrofacetConductorMaterial(
             ior=spy.float3(0.27527, 1.0066, 1.2444),
             extinction=spy.float3(3.3726, 2.5823, 2.4352),
             roughness=roughness,
+            requires_grad=requires_grad,
         )
 
     @staticmethod
-    def gold(roughness: float) -> 'MicrofacetConductorMaterial':
+    def gold(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
         return MicrofacetConductorMaterial(
             ior=spy.float3(0.18836, 0.42415, 1.3489),
             extinction=spy.float3(3.4034, 2.4721, 1.8851),
             roughness=roughness,
+            requires_grad=requires_grad
         )
 
     @staticmethod
-    def silver(roughness: float) -> 'MicrofacetConductorMaterial':
+    def silver(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
         return MicrofacetConductorMaterial(
             ior=spy.float3(0.056909, 0.0595825, 0.044439),
             extinction=spy.float3(4.2543, 3.5974, 2.7511),
             roughness=roughness,
+            requires_grad=requires_grad,
         )
 
     @staticmethod 
-    def aluminium(roughness: float) -> 'MicrofacetConductorMaterial':
+    def aluminium(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
         return MicrofacetConductorMaterial(
             ior=spy.float3(1.4303, 1.0152, 0.66843),
             extinction=spy.float3(7.5081, 6.6273, 5.5748),
             roughness=roughness,
+            requires_grad=requires_grad,
         )
 
     @staticmethod 
-    def cobalt(roughness: float) -> 'MicrofacetConductorMaterial':
+    def cobalt(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
         return MicrofacetConductorMaterial(
             ior=spy.float3(1.7715, 2.0524, 1.7715),
             extinction=spy.float3(3.3385, 3.8242, 3.3385),
             roughness=roughness,
+            requires_grad=requires_grad,
         )
 
     def pack_parameters(self) -> bytes:
-        return struct.pack(
-            "fffffff",
+        return self.parameter_struct.pack(
             self.ior.x,
             self.ior.y,
             self.ior.z,
@@ -204,6 +212,16 @@ class MicrofacetConductorMaterial(Material):
             self.roughness,
         )
 
+    def unpack_parameters(self, parameter_bytes):
+        (
+            self.ior.x,
+            self.ior.y,
+            self.ior.z,
+            self.extinction.x,
+            self.extinction.y,
+            self.extinction.z,
+            self.roughness,
+        ) = self.parameter_struct.unpack(parameter_bytes)
 
 class MicrofacetDielectricMaterial(Material):
     def __init__(
