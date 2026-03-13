@@ -60,11 +60,16 @@ void call_backpropagate_lambertian(inout BsdfBackpropagation b)
     
     bwd_diff(evaluate_lambertian)(b.wi, b.wo, dp_color, b.weight);
 
-    if (any(isnan(dp_color.d))) {
-        return;
+    if (all(isfinite(dp_color.d))) {
+
+        float3 color_d = WaveActiveSum(dp_color.d);
+
+        if (WaveIsFirstLane()) {
+            gradients.r.add(color_d.r);
+            gradients.g.add(color_d.g);
+            gradients.b.add(color_d.b);
+        }
     }
 
-    gradients.r.add(dp_color.d.r);
-    gradients.g.add(dp_color.d.g);
-    gradients.b.add(dp_color.d.b);
+
 }

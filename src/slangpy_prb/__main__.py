@@ -438,10 +438,10 @@ def main():
 
     stage.load_gltf("./assets/XYZRGBDragon.glb")
 
-    # stage.replace_material(0, LambertianMaterial(color=spy.float3(0.8, 0.2, 0.2)))
+    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.8, 0.2, 0.2)))
     # stage.replace_material(0, SpecularConductorMaterial.cobalt())
     # stage.replace_material(0, SpecularDielectricMaterial(ior=1.5))
-    stage.replace_material(0, MicrofacetConductorMaterial.gold(roughness=0.4))
+    # stage.replace_material(0, MicrofacetConductorMaterial.gold(roughness=0.4))
     # stage.replace_material(0, MicrofacetDielectricMaterial(roughness=0.4, ior=1.5))
 
     shader_table_builder = ShaderTableBuilder()
@@ -462,9 +462,9 @@ def main():
 
     # plot_loss(device, reference, stage)
 
-    # stage.replace_material(0, LambertianMaterial(color=spy.float3(0.5, 0.5, 0.5), requires_grad=True))
+    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.5, 0.5, 0.5), requires_grad=True))
     # stage.replace_material(0, MicrofacetDielectricMaterial(roughness=0.5, ior=1.5, requires_grad=True))
-    stage.replace_material(0, MicrofacetConductorMaterial.copper(roughness=0.8, requires_grad=True))
+    # stage.replace_material(0, MicrofacetConductorMaterial.copper(roughness=0.8, requires_grad=True))
 
     optimize(
         device,

@@ -108,13 +108,32 @@ void call_backpropagate_microfacet_conductor_ss(inout BsdfBackpropagation b)
 
     bwd_diff(evaluate_microfacet_conductor_ss)(b.wo, b.wi, dp_ior, dp_extinction, dp_roughness, b.weight);
 
-    gradients.ior_r.add(dp_ior.d.r);
-    gradients.ior_g.add(dp_ior.d.g);
-    gradients.ior_b.add(dp_ior.d.b);
-    
-    gradients.extinction_r.add(dp_extinction.d.r);
-    gradients.extinction_g.add(dp_extinction.d.g);
-    gradients.extinction_b.add(dp_extinction.d.b);
+    if (all(isfinite(dp_ior.d))) {
+        float3 ior_d = WaveActiveSum(dp_ior.d);
 
-    gradients.roughness.add(dp_roughness.d);
+        if (WaveIsFirstLane()) {
+            gradients.ior_r.add(ior_d.r);
+            gradients.ior_g.add(ior_d.g);
+            gradients.ior_b.add(ior_d.b);
+        }
+    }
+
+    if (all(isfinite(dp_extinction.d))) {
+
+        float3 extinction_d = WaveActiveSum(dp_extinction.d);
+
+        if (WaveIsFirstLane()) {
+            gradients.extinction_r.add(extinction_d.r);
+            gradients.extinction_g.add(extinction_d.g);
+            gradients.extinction_b.add(extinction_d.b);
+        }
+    }
+
+    if (isfinite(dp_roughness.d)) {
+        float roughness_d = WaveActiveSum(dp_roughness.d);
+
+        if (WaveIsFirstLane()) {
+            gradients.roughness.add(roughness_d);
+        }
+    }
 }
