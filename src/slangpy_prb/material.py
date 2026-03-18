@@ -1,164 +1,183 @@
 import struct
+import math
+from typing import Any
+from dataclasses import dataclass, field
 
 import slangpy as spy
 
+@dataclass(unsafe_hash=True)
+class MaterialParameter:
+    name: str
+    value: float = field(hash=False)
+    requires_grad: bool
+    range: tuple[float, float] = field(hash=False)
+
+    def pack(self) -> bytes:
+        return struct.pack("f", self.value)
+
+@dataclass(unsafe_hash=True)
 class Material:
-    def __init__(
-        self,
-        parameter_struct: struct.Struct,
-        evaluate_entry_point: str,
-        sample_entry_point: str,
-        backpropagate_entry_point: str = "",
-        requires_grad: bool = False,
-    ):
-        super().__init__()
-
-        self.parameter_struct = parameter_struct
-        self.evaluate_entry_point = evaluate_entry_point
-        self.sample_entry_point = sample_entry_point
-        self.backpropagate_entry_point = backpropagate_entry_point
-        self.requires_grad = requires_grad
-
-    def pack_parameters(self) -> bytes: ...
-    def unpack_parameters(self, parameter_bytes: bytes): ...
-
-class LambertianMaterial(Material):
-    def __init__(
-        self,
-        color: spy.float3,
-        requires_grad: bool = False,
-    ):
-        super().__init__(
-            parameter_struct=struct.Struct("fff"),
-            evaluate_entry_point="call_evaluate_lambertian",
-            sample_entry_point="call_sample_lambertian",
-            backpropagate_entry_point="call_backpropagate_lambertian",
-            requires_grad=requires_grad,
-        )
-
-        self.color = color
-
-    def pack_parameters(self) -> bytes:
-        return self.parameter_struct.pack(
-            self.color.x,
-            self.color.y,
-            self.color.z,
-        )
+    parameters: tuple[MaterialParameter, ...]
+    evaluate_fn_name: str
+    sample_fn_name: str
     
-    def unpack_parameters(self, parameters: bytes):
-        self.color.x, self.color.y, self.color.z = self.parameter_struct.unpack(parameters)
+    def _parameter_loads(self) -> str:
+        constant_counter = 0
+        variable_counter = 0
+
+        loads = ""
+
+        for parameter in self.parameters:
+            if parameter.requires_grad:
+                loads += f"scene.materials.variables[io.variables_start_index + {variable_counter}],\n"
+                variable_counter += 1
+            else:
+                loads += f"scene.materials.constants[io.constants_start_index + {constant_counter}],\n"
+                constant_counter += 1
+
+        return loads
 
 
-class SpecularConductorMaterial(Material):
-    def __init__(
-        self,
-        ior: spy.float3,
-        extinction: spy.float3,    
-    ):
-        super().__init__(
-            evaluate_entry_point="call_evaluate_specular_conductor",
-            sample_entry_point="call_sample_specular_conductor",
-        )
-
-        self.ior = ior
-        self.extinction = extinction
-
-    @staticmethod
-    def copper() -> 'SpecularConductorMaterial':
-        return SpecularConductorMaterial(
-            ior=spy.float3(0.27527, 1.0066, 1.2444),
-            extinction=spy.float3(3.3726, 2.5823, 2.4352),
-        )
-
-    @staticmethod
-    def gold() -> 'SpecularConductorMaterial':
-        return SpecularConductorMaterial(
-            ior=spy.float3(0.18836, 0.42415, 1.3489),
-            extinction=spy.float3(3.4034, 2.4721, 1.8851),
-        )
-
-    @staticmethod
-    def silver() -> 'SpecularConductorMaterial':
-        return SpecularConductorMaterial(
-            ior=spy.float3(0.056909, 0.0595825, 0.044439),
-            extinction=spy.float3(4.2543, 3.5974, 2.7511),
-        )
-
-    @staticmethod 
-    def aluminium() -> 'SpecularConductorMaterial':
-        return SpecularConductorMaterial(
-            ior=spy.float3(1.4303, 1.0152, 0.66843),
-            extinction=spy.float3(7.5081, 6.6273, 5.5748),
-        )
-
-    @staticmethod 
-    def cobalt() -> 'SpecularConductorMaterial':
-        return SpecularConductorMaterial(
-            ior=spy.float3(1.7715, 2.0524, 1.7715),
-            extinction=spy.float3(3.3385, 3.8242, 3.3385),
-        )
-
-    def normal_reflectance(self) -> spy.float3:
+    def evaluate_shader(self, entry_point: str) ->  str:
         
-        reflectance = spy.float3()
+        loads = self._parameter_loads()
 
-        for i in range(3):
-            eta = complex(self.ior[i], self.extinction[i])
-            reflectance[i] = abs((eta - 1.0) / (eta + 1.0))**2
-
-        return reflectance
-
-    def pack_parameters(self) -> bytes:
-        return struct.pack(
-            "ffffff",
-            self.ior.x,
-            self.ior.y,
-            self.ior.z,
-            self.extinction.x,
-            self.extinction.y,
-            self.extinction.z,
-        )
-
-class SpecularDielectricMaterial(Material):
-    def __init__(
-        self,
-        ior: float,
-    ):
-        super().__init__(
-            evaluate_entry_point="call_evaluate_specular_dielectric",
-            sample_entry_point="call_sample_specular_dielectric",
-        )
-        self.ior = ior
-
-    def pack_parameters(self) -> bytes:
-        return struct.pack(
-            "f",
-            self.ior,
-        )
+        return f"""
+        [shader("callable")]
+        void {entry_point}(inout BsdfEvaluation io) {{
+            io.value = {self.evaluate_fn_name}(
+                io.wo,
+                io.wi,
+                {loads}
+            );
+        }}
+        """
     
-class MicrofacetConductorMaterial(Material):
-    def __init__(
-        self,
+    def sample_shader(self, entry_point: str) -> str:
+
+        loads = self._parameter_loads()
+
+        return f"""
+        [shader("callable")]
+        void {entry_point}(inout BsdfSample io) {{
+            io.value = {self.sample_fn_name}(
+                io.wo,
+                io.wi,
+                io.pdf,
+                io.rand_state,
+                {loads}
+            );
+        }}
+        """
+
+    def backpropagate_shader(self, entry_point: str) -> str:
+        constant_counter = 0
+        variable_counter = 0
+
+        loads = ""
+        arguments = ""
+        stores = ""
+
+        for parameter in self.parameters:
+            if parameter.requires_grad:
+                loads += f"DifferentialPair<float> {parameter.name} = diffPair(scene.materials.variables[io.variables_start_index + {variable_counter}]);\n"
+                stores += f"""
+                if (isfinite({parameter.name}.d)) {{
+                    float {parameter.name}_wave = WaveActiveSum({parameter.name}.d);
+
+                    if (WaveIsFirstLane()) {{
+                        scene.materials.gradient[io.variables_start_index + {variable_counter}].add({parameter.name}_wave);
+                    }}
+                }}
+                """
+                variable_counter += 1
+            else:
+                loads += f"DifferentialPair<float> {parameter.name} = diffPair(scene.materials.constants[io.constants_start_index + {constant_counter}]);\n"
+                constant_counter += 1
+            arguments += f"{parameter.name},\n"
+
+        return f"""
+        [shader("callable")]
+        void {entry_point}(inout BsdfBackpropagation io) {{
+        
+            {loads}
+            bwd_diff({self.evaluate_fn_name})(
+                io.wo,
+                io.wi,
+                {arguments}
+                io.weight,
+            );
+
+            {stores}
+        }}
+        """
+    
+    @staticmethod
+    def _standardize_parameter(
+        x: Any | tuple[Any, bool],
+    ) -> tuple[Any, bool]:
+        if isinstance(x, tuple) and len(x) == 2 and isinstance(x[1], bool):
+            return x
+        return (x, False)
+
+    @staticmethod
+    def lambertian(
+        color: spy.float3 | tuple[spy.float3, bool],
+    ) -> 'Material':
+        color, color_requires_grad = Material._standardize_parameter(color)
+        
+        return Material(
+            parameters=(
+                MaterialParameter("color_r", color.x, color_requires_grad, (0.0, 1.0)),
+                MaterialParameter("color_g", color.y, color_requires_grad, (0.0, 1.0)),
+                MaterialParameter("color_b", color.z, color_requires_grad, (0.0, 1.0)),
+            ),
+            evaluate_fn_name="evaluate_lambertian",
+            sample_fn_name="sample_lambertian",
+        )
+
+    @staticmethod
+    def microfacet_conductor_ss(
         ior: spy.float3,
         extinction: spy.float3,
         roughness: float,
         requires_grad: bool = False,
-    ):
-        super().__init__(
-            parameter_struct=struct.Struct("fffffff"),
-            evaluate_entry_point="call_evaluate_microfacet_conductor_ss",
-            sample_entry_point="call_sample_microfacet_conductor_ss",
-            backpropagate_entry_point="call_backpropagate_microfacet_conductor_ss",
-            requires_grad=requires_grad,
+    ) -> 'Material':
+        return Material(
+            parameters=(
+                MaterialParameter("ior_r", ior.x, requires_grad, (0.0, math.inf)),
+                MaterialParameter("ior_g", ior.y, requires_grad, (0.0, math.inf)),
+                MaterialParameter("ior_b", ior.z, requires_grad, (0.0, math.inf)),
+                MaterialParameter("extinction_r", extinction.x, requires_grad, (0.0, math.inf)),
+                MaterialParameter("extinction_g", extinction.y, requires_grad, (0.0, math.inf)),
+                MaterialParameter("extinction_b", extinction.z, requires_grad, (0.0, math.inf)),
+                MaterialParameter("roughness", roughness, requires_grad, (0.0, 1.0)),
+            ),
+            evaluate_fn_name="evaluate_microfacet_conductor_ss",
+            sample_fn_name="sample_microfacet_conductor_ss",
         )
 
-        self.ior = ior
-        self.extinction = extinction
-        self.roughness = roughness
-
     @staticmethod
-    def copper(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
-        return MicrofacetConductorMaterial(
+    def microfacet_dielectric_ss(
+        ior: float | tuple[float, bool],
+        roughness: float | tuple[float, bool],
+    ) -> 'Material':
+        ior, ior_requires_grad = Material._standardize_parameter(ior)
+        roughness, roughness_requires_grad = Material._standardize_parameter(roughness)
+
+        return Material(
+            parameters=(
+                MaterialParameter("ior", ior, ior_requires_grad, (0.0, math.inf)),
+                MaterialParameter("roughness", roughness, roughness_requires_grad, (0.0, 1.0)),
+            ),
+            evaluate_fn_name="evaluate_microfacet_dielectric_ss",
+            sample_fn_name="sample_microfacet_dielectric_ss",
+        )
+
+class Metals:
+    @staticmethod
+    def copper(roughness: float, requires_grad: bool = False) -> Material:
+        return Material.microfacet_conductor_ss(
             ior=spy.float3(0.27527, 1.0066, 1.2444),
             extinction=spy.float3(3.3726, 2.5823, 2.4352),
             roughness=roughness,
@@ -166,17 +185,17 @@ class MicrofacetConductorMaterial(Material):
         )
 
     @staticmethod
-    def gold(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
-        return MicrofacetConductorMaterial(
+    def gold(roughness: float, requires_grad: bool = False) -> Material:
+        return Material.microfacet_conductor_ss(
             ior=spy.float3(0.18836, 0.42415, 1.3489),
             extinction=spy.float3(3.4034, 2.4721, 1.8851),
             roughness=roughness,
-            requires_grad=requires_grad
+            requires_grad=requires_grad,
         )
 
     @staticmethod
-    def silver(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
-        return MicrofacetConductorMaterial(
+    def silver(roughness: float, requires_grad: bool = False) -> Material:
+        return Material.microfacet_conductor_ss(
             ior=spy.float3(0.056909, 0.0595825, 0.044439),
             extinction=spy.float3(4.2543, 3.5974, 2.7511),
             roughness=roughness,
@@ -184,8 +203,8 @@ class MicrofacetConductorMaterial(Material):
         )
 
     @staticmethod 
-    def aluminium(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
-        return MicrofacetConductorMaterial(
+    def aluminium(roughness: float, requires_grad: bool = False) -> Material:
+        return Material.microfacet_conductor_ss(
             ior=spy.float3(1.4303, 1.0152, 0.66843),
             extinction=spy.float3(7.5081, 6.6273, 5.5748),
             roughness=roughness,
@@ -193,59 +212,10 @@ class MicrofacetConductorMaterial(Material):
         )
 
     @staticmethod 
-    def cobalt(roughness: float, requires_grad: bool = False) -> 'MicrofacetConductorMaterial':
-        return MicrofacetConductorMaterial(
+    def cobalt(roughness: float, requires_grad: bool = False) -> Material:
+        return Material.microfacet_conductor_ss(
             ior=spy.float3(1.7715, 2.0524, 1.7715),
             extinction=spy.float3(3.3385, 3.8242, 3.3385),
             roughness=roughness,
             requires_grad=requires_grad,
         )
-
-    def pack_parameters(self) -> bytes:
-        return self.parameter_struct.pack(
-            self.ior.x,
-            self.ior.y,
-            self.ior.z,
-            self.extinction.x,
-            self.extinction.y,
-            self.extinction.z,
-            self.roughness,
-        )
-
-    def unpack_parameters(self, parameter_bytes):
-        (
-            self.ior.x,
-            self.ior.y,
-            self.ior.z,
-            self.extinction.x,
-            self.extinction.y,
-            self.extinction.z,
-            self.roughness,
-        ) = self.parameter_struct.unpack(parameter_bytes)
-
-class MicrofacetDielectricMaterial(Material):
-    def __init__(
-        self,
-        ior: float,
-        roughness: float,
-        requires_grad: bool = False,
-    ):
-        super().__init__(
-            parameter_struct=struct.Struct("ff"),
-            evaluate_entry_point="call_evaluate_microfacet_dielectric_ss",
-            sample_entry_point="call_sample_microfacet_dielectric_ss",
-            backpropagate_entry_point="call_backpropagate_microfacet_dielectric_ss",
-            requires_grad=requires_grad,
-        )
-
-        self.ior = ior
-        self.roughness = roughness
-
-    def pack_parameters(self) -> bytes:
-        return self.parameter_struct.pack(
-            self.ior,
-            self.roughness,
-        )
-    
-    def unpack_parameters(self, parameter_bytes: bytes):
-        self.ior, self.roughness = self.parameter_struct.unpack(parameter_bytes)

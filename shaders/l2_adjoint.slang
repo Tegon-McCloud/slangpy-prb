@@ -1,9 +1,8 @@
-
 Texture2D<float4> primal;
 Texture2D<float4> reference;
 RWTexture2D<float4> adjoint;
 
-float4 l2_adjoint(float4 p, float4 r) {
+float3 l2_adjoint(float3 p, float3 r) {
     return 2.0 * (p - r);
 }
 
@@ -12,11 +11,11 @@ float4 l2_adjoint(float4 p, float4 r) {
 void main(uint3 tid: SV_DispatchThreadID) {
     uint2 pixel = tid.xy;
 
-    float4 p = primal[pixel];
-    float4 r = reference[pixel];
-    float4 a = l2_adjoint(p, r);
+    float3 p = primal[pixel].rgb;
+    float3 r = reference[pixel].rgb;
+    float3 a = l2_adjoint(p, r);
 
-    adjoint[pixel] = float4(a.xyz, 1.0);
+    adjoint[pixel] = float4(a, 1.0);
 }
 
 

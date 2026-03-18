@@ -1,4 +1,5 @@
 import util;
+import bsdf;
 
 public struct MeshDesc {
     public uint vertex_offset;
@@ -10,8 +11,53 @@ public struct MaterialDesc {
     public uint sample_call_index;
     public uint backpropagate_call_index;
     public uint requires_grad;
-    public Ptr<void, Access.Read, AddressSpace.Device> parameters;
-    public Ptr<void, Access.ReadWrite, AddressSpace.Device> gradients;
+    public uint constants_start_index;
+    public uint variables_start_index;
+
+    public float3 evaluate_bsdf(
+        float3 wo,
+        float3 wi,
+        inout uint rand_state,
+        
+    ) {
+        BsdfEvaluation e;
+        e.constants_start_index = this.constants_start_index;
+        e.variables_start_index = this.variables_start_index;
+        e.rand_state = rand_state;
+        e.wo = wo;
+        e.wi = wi;
+
+        CallShader(this.evaluate_call_index, e);
+
+        rand_state = e.rand_state;
+
+        return e.value;
+    }
+
+    public float3 sample_bsdf(
+        float3 wo,
+        out float3 value,
+        out float pdf,
+        inout uint rand_state,
+        out uint error_state,
+    ) {
+        BsdfSample bsdf_sample;
+        bsdf_sample.constants_start_index = this.constants_start_index;
+        bsdf_sample.variables_start_index = this.variables_start_index;
+        bsdf_sample.rand_state = rand_state;
+        bsdf_sample.error_state = 0;
+        bsdf_sample.wo = wo;
+        bsdf_sample.ior_outside = 1.0; // TODO: keep track of ior
+
+        CallShader(this.sample_call_index, bsdf_sample);
+
+        value = bsdf_sample.value;
+        pdf = bsdf_sample.pdf;
+        rand_state = bsdf_sample.rand_state;
+        error_state = bsdf_sample.error_state;
+
+        return bsdf_sample.wi;
+    }
 }
 
 public struct InstanceDesc {
@@ -33,24 +79,32 @@ public struct PerspectiveCamera {
     }
 }
 
+public struct Meshes {
+    public StructuredBuffer<float3> positions;
+    public StructuredBuffer<float3> normals;
+    public StructuredBuffer<uint> indices;
+    public StructuredBuffer<MeshDesc> descs;
+}
+
+public struct Materials {
+    public StructuredBuffer<float> constants;
+    public StructuredBuffer<float> variables;
+    public RWStructuredBuffer<Atomic<float>> gradient;
+    public StructuredBuffer<MaterialDesc> descs;
+}
+
 public struct Scene {
     public RaytracingAccelerationStructure tlas;
     public Texture2D<float3> environment_map;
     public SamplerState environment_sampler;
 
     public PerspectiveCamera camera;
-
-    public StructuredBuffer<float3> positions;
-    public StructuredBuffer<float3> normals;
-    public StructuredBuffer<uint> indices;
-    public StructuredBuffer<MeshDesc> mesh_descs;
-
-    public StructuredBuffer<MaterialDesc> material_descs;
+    public Meshes meshes;
+    public Materials materials;
 
     public StructuredBuffer<InstanceDesc> instance_descs;
-
-    private StructuredBuffer<uint8_t> material_parameters;
-    private RWStructuredBuffer<uint8_t> material_gradients; 
 }
 
 public ParameterBlock<Scene> scene;
+
+

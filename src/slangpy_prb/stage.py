@@ -117,13 +117,13 @@ class Stage:
 
     def _load_gltf_meshes(self, gltf: GLTF2) -> list[GltfMeshDescriptor]:
 
-        from . import LambertianMaterial
+        from . import Material
 
         gltf_meshes: list[GltfMeshDescriptor] = []
 
         for gltf_mesh in gltf.meshes:
 
-            material_handle = self.add_material(LambertianMaterial(spy.float3(0.5, 0.5, 0.5)))
+            material_handle = self.add_material(Material.lambertian(spy.float3(0.5, 0.5, 0.5)))
 
             primitive_mesh_handles: list[int] = []
             primitive_material_handles: list[int] = []

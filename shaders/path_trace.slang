@@ -49,45 +49,10 @@ float3 sample_dumb(
     float3 wi = sample_sphere(rand_state);
     pdf = 1.0 / (4.0 * pi);
 
-    BsdfEvaluation e;
-    e.set_parameter_ptr(material_desc.parameters);
-    e.rand_state = rand_state;
-    e.wo = wo;
-    e.wi = wi;
-
-    CallShader(material_desc.evaluate_call_index, e);
-
-    value = e.value;
-    rand_state = e.rand_state;
+    value = material_desc.evaluate_bsdf(wo, wi, rand_state);
     error_state = 0;
 
     return wi;
-}
-
-
-float3 sample_bsdf(
-    MaterialDesc material_desc,
-    float3 wo,
-    out float3 value,
-    out float pdf,
-    inout uint rand_state,
-    out uint error_state,
-) {
-    BsdfSample bsdf_sample;
-    bsdf_sample.set_parameter_ptr(material_desc.parameters);
-    bsdf_sample.rand_state = rand_state;
-    bsdf_sample.error_state = 0;
-    bsdf_sample.wo = wo;
-    bsdf_sample.ior_outside = 1.0; // TODO: keep track of ior's with stack
-
-    CallShader(material_desc.sample_call_index, bsdf_sample);
-
-    value = bsdf_sample.value;
-    pdf = bsdf_sample.pdf;
-    rand_state = bsdf_sample.rand_state;
-    error_state = bsdf_sample.error_state;
-    
-    return bsdf_sample.wi;
 }
 
 float3 sample_path(Ray ray, inout uint rand_state) {
@@ -105,7 +70,7 @@ float3 sample_path(Ray ray, inout uint rand_state) {
         }
 
         HitDesc hit = response.hit;
-        MaterialDesc material_desc = scene.material_descs[hit.material_index];
+        MaterialDesc material_desc = scene.materials.descs[hit.material_index];
 
         float3x3 world_to_tangent = transpose(hit.tangent_to_world);
         float3 wo = mul(world_to_tangent, -ray.direction);
@@ -114,8 +79,7 @@ float3 sample_path(Ray ray, inout uint rand_state) {
         float bsdf_pdf;
         uint error_state;
 
-        float3 wi = sample_bsdf(
-            material_desc,
+        float3 wi = material_desc.sample_bsdf(
             wo,
             bsdf_value,
             bsdf_pdf,
@@ -146,7 +110,7 @@ void ray_gen()
 
     float3 sample = sample_path(camera_ray, rand_state);
 
-    if (any(isnan(sample)) || !all(isfinite(sample))) {
+    if (!all(isfinite(sample))) {
         sample = float3(0.0);
     }
 

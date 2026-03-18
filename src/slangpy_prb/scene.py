@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 import slangpy as spy
 
-from . import Stage, Mesh, Material
+from . import Stage, Mesh, Material, MaterialParameter
 
 class ShaderTableBuilder:
     def __init__(
@@ -12,17 +12,16 @@ class ShaderTableBuilder:
     ):
         super().__init__()
 
-        self.module_paths: set[str] = set()
+        self.modules: list[spy.Module] = []
         self.callable_entries: list[str] = []
     
-    def add_module(self, module_path: str):
-        self.module_paths.add(module_path)
+    def add_module(self, module: spy.Module):
+        self.modules.append(module)
 
     def add_callable(self, entry_point_name: str) -> int:
         index = len(self.callable_entries)
         self.callable_entries.append(entry_point_name)
         return index
-
 
 class MeshList:
     @dataclass
@@ -43,10 +42,12 @@ class MeshList:
         self,
         device: spy.Device,
         meshes: list[Mesh],
+        shader_table_builder: ShaderTableBuilder
     ):
         super().__init__()
         
         self.device = device
+        shader_table_builder.add_module(self.device.load_module("shaders/triangle.slang"))
 
         self.mesh_descs: list[MeshList.MeshDesc] = []
         vertex_count = 0
@@ -140,6 +141,16 @@ class MeshList:
 
         device.submit_command_buffer(command_encoder.finish())
 
+    def bind(
+        self,
+        cursor: spy.ShaderCursor,
+    ):
+        cursor.positions = self.position_buffer
+        cursor.normals = self.normal_buffer
+        cursor.indices = self.index_buffer
+        cursor.descs = self.mesh_desc_buffer
+
+
 
 class MaterialList:
     @dataclass
@@ -148,119 +159,148 @@ class MaterialList:
         sample_call_index: int
         backpropagate_call_index: int
         requires_grad: int
-        parameter_address: int
-        gradient_address: int
+        constants_start_index: int
+        variables_start_index: int
 
         def pack(self) -> bytes:
             return struct.pack(
-                "IIIIQQ",
+                "6I",
                 self.evaluate_call_index,
                 self.sample_call_index,
                 self.backpropagate_call_index,
                 self.requires_grad,
-                self.parameter_address,
-                self.gradient_address,
+                self.constants_start_index,
+                self.variables_start_index,
             )
+
+    @dataclass
+    class VariableDesc:
+        value: float
+        range: tuple[float, float]
 
     def __init__(
         self,
         device: spy.Device,
         materials: list[Material],
-        shader_table_builder: ShaderTableBuilder
+        shader_table_builder: ShaderTableBuilder,
     ):
         self.device = device
         self.materials = materials
-        
-        parameter_bytes = bytearray()
-        parameter_offsets: list[int] = []
-        parameter_size = 0
 
-        gradient_offsets: list[int] = []
-        gradient_size = 0
-
-        for material in materials:
-            bytes = material.pack_parameters()
-
-            parameter_bytes.extend(bytes)
-            parameter_offsets.append(parameter_size)
-            parameter_size += len(parameter_bytes)
-
-            gradient_offsets.append(gradient_size)
-            if material.requires_grad:
-                gradient_size += len(parameter_bytes)
-
-        parameter_bytes = np.frombuffer(parameter_bytes, dtype=np.uint8).flatten()
-
-        self.parameter_buffer = self.device.create_buffer(
-            data=parameter_bytes,
-            usage=spy.BufferUsage.shader_resource,
-            label="parameter_buffer",
-        )
-
-        if gradient_size > 0:
-            self.gradient_buffer = self.device.create_buffer(
-                size=gradient_size,
-                usage=spy.BufferUsage.shader_resource | spy.BufferUsage.unordered_access,
-                label="gradient_buffer",
-            )
-        else:
-            self.gradient_buffer = None
-        
+        constants: list[float] = []
+        variables: list[MaterialList.VariableDesc] = []
         self.material_descs: list[MaterialList.MaterialDesc] = []
 
-        for material, parameter_offset, gradient_offset in zip(materials, parameter_offsets, gradient_offsets):
-            evaluate_call_index = shader_table_builder.add_callable(material.evaluate_entry_point)
-            sample_call_index = shader_table_builder.add_callable(material.sample_entry_point)
+        module_source = """
+        import util;
+        import bsdf;
+        import scene;
 
-            if material.requires_grad:
-                backpropagate_call_index = shader_table_builder.add_callable(material.backpropagate_entry_point)
-                requires_grad = 1
+        """
 
-                if self.gradient_buffer != None:
-                    gradient_address = self.gradient_buffer.device_address + gradient_offset 
+        existing_shaders = set()
+
+        for material in self.materials:
+
+            material_constants: list[float] = []
+            material_variables: list[MaterialList.VariableDesc] = []
+
+            for parameter in material.parameters:
+                if parameter.requires_grad:
+                    material_variables.append(MaterialList.VariableDesc(parameter.value, parameter.range))
                 else:
-                    gradient_address = 0
+                    material_constants.append(parameter.value)
 
+            constants_start_index = len(constants) 
+            variables_start_index = len(variables)
+
+            constants.extend(material_constants)
+            variables.extend(material_variables)
+
+            material_requires_grad = len(material_variables) > 0 
+
+            material_hash = abs(hash(material))
+
+            evaluate_entry_point = f"call_evaluate_{material_hash:016x}"
+            sample_entry_point = f"call_sample_{material_hash:016x}"
+            backpropagate_entry_point = f"call_backpropagate_{material_hash:016x}"
+
+            if material_hash not in existing_shaders:
+                module_source += material.evaluate_shader(evaluate_entry_point)
+                module_source += material.sample_shader(sample_entry_point)
+                module_source += material.backpropagate_shader(backpropagate_entry_point)
+
+                existing_shaders.add(material_hash)
+
+            evaluate_call_index = shader_table_builder.add_callable(evaluate_entry_point)
+            sample_call_index = shader_table_builder.add_callable(sample_entry_point)
+            if material_requires_grad:
+                backpropagate_call_index = shader_table_builder.add_callable(backpropagate_entry_point)
             else:
                 backpropagate_call_index = 0xffffffff
-                requires_grad = 0
-                gradient_address = 0
 
             self.material_descs.append(MaterialList.MaterialDesc(
                 evaluate_call_index=evaluate_call_index,
                 sample_call_index=sample_call_index,
                 backpropagate_call_index=backpropagate_call_index,
-                requires_grad=requires_grad,
-                parameter_address=self.parameter_buffer.device_address + parameter_offset,
-                gradient_address=gradient_address,
+                requires_grad=1 if material_requires_grad else 0,
+                constants_start_index=constants_start_index,
+                variables_start_index=variables_start_index,
             ))
 
-        material_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.material_descs), dtype=np.uint8).flatten()
+        module_name = f"materials{abs(hash(module_source)):016x}" # hash is a workaround for incorrect caching by slangpy
+        shader_table_builder.add_module(self.device.load_module_from_source(module_name, module_source))
+
+        constants_bytes = b"".join(struct.pack("f", c) for c in constants)
+        if (len(constants_bytes) == 0): 
+            constants_bytes = bytes([0])
+
+        self.constants_buffer = self.device.create_buffer(
+            usage=spy.BufferUsage.shader_resource,
+            label="material_constants_buffer",
+            data=np.frombuffer(constants_bytes, dtype=np.uint8).flatten(),
+        )
+
+        variables_bytes = b"".join(struct.pack("f", v.value) for v in variables)
+        if (len(variables_bytes) == 0): 
+            variables_bytes = bytes([0])
+        
+        self.variables_buffer = self.device.create_buffer(
+            usage=spy.BufferUsage.shader_resource | spy.BufferUsage.unordered_access,
+            label="material_variables_buffer",
+            data=np.frombuffer(variables_bytes, dtype=np.uint8).flatten(),
+        )
+
+        self.gradient_buffer = self.device.create_buffer(
+            usage=spy.BufferUsage.shader_resource | spy.BufferUsage.unordered_access,
+            label="material_gradient_buffer",
+            size=len(variables_bytes),
+        )
+
+        material_descs_bytes = b"".join(desc.pack() for desc in self.material_descs)
+        if (len(material_descs_bytes) == 0): 
+            material_descs_bytes = bytes([0])
 
         self.material_descs_buffer = device.create_buffer(
             usage=spy.BufferUsage.shader_resource,
             label="material_descs_buffer",
-            data=material_descs_bytes,
+            data=np.frombuffer(material_descs_bytes, dtype=np.uint8).flatten(),
         )
+
+    def bind(
+        self,
+        cursor: spy.ShaderCursor,
+    ):
+        cursor.descs = self.material_descs_buffer
+        cursor.constants = self.constants_buffer
+        cursor.variables = self.variables_buffer
+        cursor.gradient = self.gradient_buffer
 
     def zero_grad(self, command_encoder):
         command_encoder.clear_buffer(self.gradient_buffer)
 
     def download(self):
-        parameters = self.parameter_buffer.to_numpy()
-        parameter_start = self.parameter_buffer.device_address
-
-        for material, desc in zip(self.materials, self.material_descs):
-            begin = desc.parameter_address - parameter_start
-            end = begin + material.parameter_struct.size
-
-            material.unpack_parameters(parameters[begin:end].tobytes())
-
-
-
-
-
-
+        pass
 
 class Scene:
     @dataclass
@@ -285,17 +325,17 @@ class Scene:
         self.device = device
         self.stage = stage
 
-        shader_table_builder.add_module("shaders/triangle.slang")
-        shader_table_builder.add_module("shaders/bsdf.slang")
-        shader_table_builder.add_module("shaders/environment.slang")
-
-        self.meshes = MeshList(self.device, self.stage.meshes)
+        self.meshes = MeshList(self.device, self.stage.meshes, shader_table_builder)
         self.materials = MaterialList(self.device, self.stage.materials, shader_table_builder)
 
-        self.instance_descs = [Scene.InstanceDesc(
-            mesh_index=instance.mesh_id,
-            material_index=instance.material_id,
-        ) for instance in stage.instances]
+        shader_table_builder.add_module(self.device.load_module("shaders/environment.slang"))
+
+        self.instance_descs = [
+            Scene.InstanceDesc(
+                mesh_index=instance.mesh_id,
+                material_index=instance.material_id,
+            ) for instance in stage.instances
+        ]
 
         instance_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.instance_descs), dtype=np.uint8).flatten()
 
@@ -354,22 +394,10 @@ class Scene:
     def bind(self, cursor: spy.ShaderCursor):
         cursor.tlas = self.tlas
         cursor.environment_map = self.environment_texture
-
-        cursor.positions = self.meshes.position_buffer
-        cursor.normals = self.meshes.normal_buffer
-        cursor.indices = self.meshes.index_buffer
-        cursor.mesh_descs = self.meshes.mesh_desc_buffer
-
-        if self.materials.parameter_buffer != None:
-            cursor.material_parameters = self.materials.parameter_buffer
-
-        if self.materials.gradient_buffer != None:
-            cursor.material_gradients = self.materials.gradient_buffer
-        
-        cursor.material_descs = self.materials.material_descs_buffer
-
         cursor.instance_descs = self.instance_descs_buffer
-        
+
+        self.meshes.bind(cursor.meshes)
+        self.materials.bind(cursor.materials)
         self.camera.bind(cursor.camera)
 
     def zero_grad(self, command_encoder: spy.CommandEncoder):

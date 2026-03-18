@@ -10,145 +10,6 @@ import json
 
 from . import *
 
-class PathTracer:
-    def __init__(
-        self,
-        device: spy.Device,
-        shader_table_builder: ShaderTableBuilder,
-    ):
-        super().__init__()
-
-        self.device = device
-
-        module_paths = set(shader_table_builder.module_paths)
-        module_paths.add("shaders/path_trace.slang")
-
-        modules = [device.load_module(path) for path in module_paths]
-
-        entry_points = [
-            entry_point
-            for module in modules
-            for entry_point in module.entry_points
-            if entry_point.stage in [
-                spy.ShaderStage.ray_generation,
-                spy.ShaderStage.miss,
-                spy.ShaderStage.closest_hit,
-                spy.ShaderStage.any_hit,
-                spy.ShaderStage.intersection,
-                spy.ShaderStage.callable,
-            ]
-        ]
-
-        program = device.link_program(modules=modules, entry_points=entry_points)
-
-        self.pipeline = device.create_ray_tracing_pipeline(
-            program=program,
-            hit_groups=[
-                spy.HitGroupDesc(hit_group_name="triangle_primary", closest_hit_entry_point="closest_hit_triangle_primary"),
-                spy.HitGroupDesc(hit_group_name="triangle_occlusion", any_hit_entry_point="any_hit_triangle_occlusion")
-            ],
-            max_recursion=2,
-            max_ray_payload_size=64,
-        )
-
-        self.shader_table = device.create_shader_table(
-            program=program,
-            ray_gen_entry_points=["ray_gen"],
-            miss_entry_points=["miss_primary", "miss_occlusion"],
-            hit_group_names=["triangle_primary", "triangle_occlusion"],
-            callable_entry_points=shader_table_builder.callable_entries
-        )
-
-
-    def sample(
-        self,
-        command_encoder: spy.CommandEncoder,
-        scene: Scene,
-        render_target: spy.Texture,
-        sample_index: int,
-    ):
-
-        with command_encoder.begin_ray_tracing_pass() as pass_encoder:
-            shader_object = pass_encoder.bind_pipeline(self.pipeline, self.shader_table)
-            cursor = spy.ShaderCursor(shader_object)
-
-            cursor.sample_seed = random.getrandbits(32)
-            cursor.sample_index = sample_index
-            cursor.render_target = render_target
-            scene.bind(cursor.scene)
-
-            pass_encoder.dispatch_rays(0, [render_target.width, render_target.height, 1])
-
-class ReplayBackpropagater:
-    def __init__(
-        self,
-        device: spy.Device,
-        shader_table_builder: ShaderTableBuilder,
-    ):
-        super().__init__()
-
-        self.device = device
-
-        module_paths = set(shader_table_builder.module_paths)
-        module_paths.add("shaders/backpropagate_replay.slang")
-        modules = [device.load_module(path) for path in module_paths]
-
-        entry_points = [
-            entry_point
-            for module in modules
-            for entry_point in module.entry_points
-            if entry_point.stage in [
-                spy.ShaderStage.ray_generation,
-                spy.ShaderStage.miss,
-                spy.ShaderStage.closest_hit,
-                spy.ShaderStage.any_hit,
-                spy.ShaderStage.intersection,
-                spy.ShaderStage.callable,
-            ]
-        ]
-
-        program = device.link_program(modules=modules, entry_points=entry_points)
-
-        self.pipeline = device.create_ray_tracing_pipeline(
-            program=program,
-            hit_groups=[
-                spy.HitGroupDesc(hit_group_name="triangle_primary", closest_hit_entry_point="closest_hit_triangle_primary"),
-                spy.HitGroupDesc(hit_group_name="triangle_occlusion", any_hit_entry_point="any_hit_triangle_occlusion")
-            ],
-            max_recursion=2,
-            max_ray_payload_size=64,
-        )
-
-        self.shader_table = device.create_shader_table(
-            program=program,
-            ray_gen_entry_points=["ray_gen"],
-            miss_entry_points=["miss_primary", "miss_occlusion"],
-            hit_group_names=["triangle_primary", "triangle_occlusion"],
-            callable_entry_points=shader_table_builder.callable_entries
-        )
-
-    def sample(
-        self,
-        command_encoder: spy.CommandEncoder,
-        scene: Scene,
-        adjoint: spy.Texture,
-        sample_count: int,
-        error_target: spy.Texture,
-    ):
-        
-        with command_encoder.begin_ray_tracing_pass() as pass_encoder:
-            shader_object = pass_encoder.bind_pipeline(self.pipeline, self.shader_table)
-            cursor = spy.ShaderCursor(shader_object)
-
-            cursor.sample_seed = random.getrandbits(32)
-            cursor.sample_count = sample_count
-            cursor.adjoint = adjoint
-            cursor.error_target = error_target
-
-            scene.bind(cursor.scene)
-
-            pass_encoder.dispatch_rays(0, [adjoint.width, adjoint.height, 1])
-
 class Tonemapper:
 
     def __init__(
@@ -296,8 +157,9 @@ def optimize(
             sample_count=1 << 10,
         )
 
-        save_img(tonemap(device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
-
+        if iteration % 5 == 0:
+            save_img(tonemap(device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
+        
         reference_arr = reference.to_numpy()
         primal_arr = primal.to_numpy()
 
@@ -313,7 +175,8 @@ def optimize(
             usage=spy.TextureUsage.shader_resource,
             label="adjoint",
         )
-        save_img(width * height * adjoint_arr[:,:,0:3], f"./output/adjoint_{iteration:02}.png")
+        if iteration % 5 == 0:
+           save_img(width * height * adjoint_arr[:,:,0:3], f"./output/adjoint_{iteration:02}.png")
 
         command_encoder = device.create_command_encoder()
         scene.zero_grad(command_encoder)
@@ -328,7 +191,7 @@ def optimize(
             error_target=error_target,
         )
 
-        value = scene.materials.parameter_buffer.to_numpy().view(np.float32)
+        value = scene.materials.variables_buffer.to_numpy().view(np.float32)
         gradient = scene.materials.gradient_buffer.to_numpy().view(np.float32)
 
         tqdm.write(f"value: {value}")
@@ -336,7 +199,7 @@ def optimize(
 
         value[0:gradient.shape[0]] -= 0.5 * gradient
 
-        scene.materials.parameter_buffer.copy_from_numpy(value)
+        scene.materials.variables_buffer.copy_from_numpy(value)
 
         save_img(error_target.to_numpy()[:,:,0:3], f"./output/error.png")
 
@@ -366,7 +229,7 @@ def plot_loss(
     gradient = np.empty(shape=n, dtype=np.float32)
 
     for i in tqdm(range(n)):
-        stage.replace_material(0, MicrofacetDielectricMaterial(ior=1.5, roughness=roughness[i], requires_grad=True))
+        # stage.replace_material(0, MicrofacetDielectricMaterial(ior=1.5, roughness=roughness[i], requires_grad=True))
 
         shader_table_builder = ShaderTableBuilder()
         scene = Scene(device, stage, shader_table_builder)
@@ -438,11 +301,9 @@ def main():
 
     stage.load_gltf("./assets/XYZRGBDragon.glb")
 
-    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.8, 0.2, 0.2)))
-    # stage.replace_material(0, SpecularConductorMaterial.cobalt())
-    # stage.replace_material(0, SpecularDielectricMaterial(ior=1.5))
-    # stage.replace_material(0, MicrofacetConductorMaterial.gold(roughness=0.4))
-    # stage.replace_material(0, MicrofacetDielectricMaterial(roughness=0.4, ior=1.5))
+    # stage.replace_material(0, Material.lambertian(color=spy.float3(0.8, 0.2, 0.2)))
+    stage.replace_material(0, Metals.gold(roughness=0.4))
+    # stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=0.4))
 
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
@@ -462,17 +323,15 @@ def main():
 
     # plot_loss(device, reference, stage)
 
-    stage.replace_material(0, LambertianMaterial(color=spy.float3(0.5, 0.5, 0.5), requires_grad=True))
-    # stage.replace_material(0, MicrofacetDielectricMaterial(roughness=0.5, ior=1.5, requires_grad=True))
-    # stage.replace_material(0, MicrofacetConductorMaterial.copper(roughness=0.8, requires_grad=True))
+    # stage.replace_material(0, Material.lambertian(color=spy.float3(0.5, 0.5, 0.5), color_requires_grad=True))
+    # stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.5, True)))
+    stage.replace_material(0, Metals.copper(roughness=0.8, requires_grad=True))
 
     optimize(
         device,
         reference,
         stage,
     )
-
-    print(f"final roughness: {stage.materials[0].roughness}")
 
 
 if __name__ == "__main__":

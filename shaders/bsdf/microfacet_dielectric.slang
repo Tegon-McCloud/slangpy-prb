@@ -1,20 +1,10 @@
 implementing bsdf;
 
-struct MicrofacetDielectricParameters {
-    float ior;
-    float roughness;
-}
-
-struct MicrofacetDielectricGradients {
-    Atomic<float> ior;
-    Atomic<float> roughness;
-}
-
 [Differentiable]
-float3 evaluate_microfacet_dielectric_ss(
+public float3 evaluate_microfacet_dielectric_ss(
     no_diff float3 wo,
     no_diff float3 wi,
-    no_diff float ior,
+    float ior,
     float roughness,
 ) {
     float2 alpha = float2(roughness * roughness);
@@ -63,7 +53,7 @@ float3 evaluate_microfacet_dielectric_ss(
     return fresnel * ndf_ggx(wm, alpha) * masking_shadowing_ggx(wo, wi, alpha) * cosines;
 }
 
-float3 sample_microfacet_dielectric_ss(
+public float3 sample_microfacet_dielectric_ss(
     float3 wo,
     out float3 wi,
     out float pdf,
@@ -137,37 +127,4 @@ float3 sample_microfacet_dielectric_ss(
     float geometry = masking_shadowing_ggx(wo, wi, alpha);
 
     return fresnel * ndf * geometry * cosines;
-}
-
-
-[shader("callable")]
-void call_evaluate_microfacet_dielectric_ss(inout BsdfEvaluation e)
-{
-    MicrofacetDielectricParameters parameters = e.get_parameters<MicrofacetDielectricParameters>();
-    e.value = evaluate_microfacet_dielectric_ss(e.wo, e.wi, parameters.ior, parameters.roughness);
-}
-
-[shader("callable")]
-void call_sample_microfacet_dielectric_ss(inout BsdfSample s)
-{
-    MicrofacetDielectricParameters parameters = s.get_parameters<MicrofacetDielectricParameters>();
-    s.value = sample_microfacet_dielectric_ss(s.wo, s.wi, s.pdf, s.rand_state, parameters.ior, parameters.roughness);
-}
-
-[shader("callable")]
-void call_backpropagate_microfacet_dielectric_ss(inout BsdfBackpropagation b)
-{
-    MicrofacetDielectricParameters parameters = b.get_parameters<MicrofacetDielectricParameters>();
-    Ptr<MicrofacetDielectricGradients, Access.ReadWrite, AddressSpace.Device> gradients = b.get_gradients<MicrofacetDielectricGradients>();
-
-    DifferentialPair<float> dp_roughness = diffPair(parameters.roughness);
-
-    bwd_diff(evaluate_microfacet_dielectric_ss)(b.wi, b.wo, parameters.ior, dp_roughness, b.weight);
-
-    if (any(isnan(dp_roughness.d))) {
-        return;
-    }
-
-    gradients.roughness.add(dp_roughness.d);
-
 }
