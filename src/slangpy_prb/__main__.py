@@ -96,33 +96,73 @@ class L2Loss:
             command_encoder=command_encoder,
         )
 
-def save_callback(iteration: int, scene: Scene, primal: spy.Texture):
-    if iteration % 10 == 0: 
-        save_img(tonemap(primal.device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
 
 def optimize(
     device: spy.Device,
     reference: spy.Texture,
     stage: Stage,
 ):
-    
+    width = reference.width
+    height = reference.height
+
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
 
-    path_tracer = PathTracer(device, shader_table_builder)
+    renderer = PathTracer(device, shader_table_builder)
     backpropagater = ReplayBackpropagater(device, shader_table_builder)
-    optimizer = GradientDescent(device)
     loss = L2Loss(device, reference)
-
-    optimizer.optimize(
-        scene,
-        lambda command_encoder, primal, out: loss.adjoint(command_encoder, primal, out),
-        reference.width,
-        reference.height,
-        path_tracer,
-        backpropagater,
-        save_callback,
+    optimizer = Adam(
+        device,
+        scene.variables,
+        scene.gradient,
+        learning_rate=0.1,
     )
+
+    adjoint = device.create_texture(
+        format=spy.Format.rgba32_float,
+        width=width,
+        height=height,
+        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
+        label="adjoint",
+    )
+
+    error_target = device.create_texture(
+        format=spy.Format.rgba32_float,
+        width=width,
+        height=height,
+        usage=spy.TextureUsage.unordered_access,
+        label="error_target",
+    )
+    
+    for iteration in tqdm(range(25)):
+        primal = renderer.render(
+            scene,
+            width,
+            height,
+            sample_count=1 << 10,
+        )
+
+        command_encoder = device.create_command_encoder()
+        scene.zero_grad(command_encoder)
+        loss.adjoint(command_encoder, primal, adjoint)
+        device.submit_command_buffer(command_encoder.finish())
+
+        backpropagater.backpropagate(
+            scene,
+            adjoint,
+            sample_count=1 << 10,
+            error_target=error_target,
+        )
+        save_img(error_target.to_numpy()[:,:,0:3], f"./output/error.png")
+
+        command_encoder = device.create_command_encoder()
+        optimizer.step(command_encoder)
+        device.submit_command_buffer(command_encoder.finish())
+        
+        if iteration % 5 == 0:
+            values = scene.variables.parameter_buffer.to_numpy().view(np.float32)
+            print(f"parameters: {values}")
+            save_img(tonemap(primal.device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
 
     scene.download()
 
@@ -242,8 +282,6 @@ def main():
     # stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.5, True)))
     stage.replace_material(0, Metals.copper(roughness=0.8, requires_grad=True))
 
-
-
     optimize(
         device,
         reference,
@@ -252,6 +290,7 @@ def main():
 
     values = [p.value for p in stage.get_material(0).parameters]
     print(f"parameters: {values}")
+
 
 if __name__ == "__main__":
     main()

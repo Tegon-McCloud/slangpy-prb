@@ -1,10 +1,12 @@
 import struct
 from dataclasses import dataclass
+from typing import Iterable
 
 import numpy as np
+import numpy.typing as npt
 import slangpy as spy
 
-from . import Stage, Mesh, Material, MaterialParameter
+from . import Stage, Mesh, Material, Instance
 
 class ShaderTableBuilder:
     def __init__(
@@ -23,16 +25,49 @@ class ShaderTableBuilder:
         self.callable_entries.append(entry_point_name)
         return index
 
-
+@dataclass
+class SceneShape:
+    num_parameters: int
 
 class SceneVariables:
     def __init__(
         self,
         device: spy.Device,
-        num_variables: int,
+        shape: SceneShape,
     ):
-        variables = device.create_buffer(device, dtype=spy.float1, shape=(num_variables,))
-   
+        self.shape = shape
+
+        parameter_size = 4 * shape.num_parameters
+        if (parameter_size == 0):
+            parameter_size = 1
+
+        self.parameter_buffer = device.create_buffer(
+            size=parameter_size,
+            usage=spy.BufferUsage.shader_resource | spy.BufferUsage.unordered_access,
+            label="variables_buffer",
+        )
+        
+class SceneVariablesBuilder:
+    def __init__(self):
+        super().__init__()
+
+        self.values: list[float] = []
+
+    def add_variables(self, values: Iterable[float]) -> int:
+        index = len(self.values)
+        self.values.extend(values)
+        return index
+    
+    def build(self, device: spy.Device) -> SceneVariables:
+        shape = SceneShape(len(self.values))
+        variables = SceneVariables(device, shape)
+
+        if shape.num_parameters > 0:
+            data = np.array(self.values, dtype=np.float32).view(dtype=np.uint8)
+            variables.parameter_buffer.copy_from_numpy(data)
+        
+        return variables
+
 class MeshList:
     @dataclass
     class MeshDesc:
@@ -193,12 +228,12 @@ class MaterialList:
         device: spy.Device,
         materials: list[Material],
         shader_table_builder: ShaderTableBuilder,
+        variables_builder: SceneVariablesBuilder,
     ):
         self.device = device
         self.materials = materials
 
         constants: list[float] = []
-        variables: list[MaterialList.VariableDesc] = []
         self.material_descs: list[MaterialList.MaterialDesc] = []
 
         module_source = """
@@ -222,10 +257,9 @@ class MaterialList:
                     material_constants.append(parameter.value)
 
             constants_start_index = len(constants) 
-            variables_start_index = len(variables)
-
             constants.extend(material_constants)
-            variables.extend(material_variables)
+
+            variables_start_index = variables_builder.add_variables(v.value for v in material_variables)
 
             material_requires_grad = len(material_variables) > 0 
 
@@ -271,22 +305,6 @@ class MaterialList:
             data=np.frombuffer(constants_bytes, dtype=np.uint8).flatten(),
         )
 
-        variables_bytes = b"".join(struct.pack("f", v.value) for v in variables)
-        if (len(variables_bytes) == 0): 
-            variables_bytes = bytes([0])
-        
-        self.variables_buffer = self.device.create_buffer(
-            usage=spy.BufferUsage.shader_resource | spy.BufferUsage.unordered_access,
-            label="material_variables_buffer",
-            data=np.frombuffer(variables_bytes, dtype=np.uint8).flatten(),
-        )
-
-        self.gradient_buffer = self.device.create_buffer(
-            usage=spy.BufferUsage.shader_resource | spy.BufferUsage.unordered_access,
-            label="material_gradient_buffer",
-            size=len(variables_bytes),
-        )
-
         material_descs_bytes = b"".join(desc.pack() for desc in self.material_descs)
         if (len(material_descs_bytes) == 0): 
             material_descs_bytes = bytes([0])
@@ -303,22 +321,16 @@ class MaterialList:
     ):
         cursor.descs = self.material_descs_buffer
         cursor.constants = self.constants_buffer
-        cursor.variables = self.variables_buffer
-        cursor.gradient = self.gradient_buffer
 
-    def zero_grad(self, command_encoder):
-        command_encoder.clear_buffer(self.gradient_buffer)
+    def update_parameters(self, variable_parameters: list[float]):
 
-    def download(self):
-        variables = self.variables_buffer.to_numpy().view(np.float32)
-        
         for material, desc in zip(self.materials, self.material_descs):    
             counter = 0
 
             for parameter in material.parameters:
                 if parameter.requires_grad:
-                    parameter.value = variables[desc.variables_start_index + counter]
-                    counter += 1    
+                    parameter.value = float(variable_parameters[desc.variables_start_index + counter])
+                    counter += 1
 
 class Scene:
     @dataclass
@@ -342,19 +354,32 @@ class Scene:
         super().__init__()
         self.device = device
         self.stage = stage
-
-        self.meshes = MeshList(self.device, self.stage.meshes, shader_table_builder)
-        self.materials = MaterialList(self.device, self.stage.materials, shader_table_builder)
-
         shader_table_builder.add_module(self.device.load_module("shaders/environment.slang"))
 
+        variables_builder = SceneVariablesBuilder()
+
+        self.meshes = MeshList(
+            self.device,
+            self.stage.meshes,
+            shader_table_builder,
+        )
+        
+        self.materials = MaterialList(
+            self.device,
+            self.stage.materials,
+            shader_table_builder,
+            variables_builder,
+        )
+
+        self.variables = variables_builder.build(self.device)
+        self.gradient = SceneVariables(self.device, self.variables.shape)
+        
         self.instance_descs = [
             Scene.InstanceDesc(
                 mesh_index=instance.mesh_id,
                 material_index=instance.material_id,
             ) for instance in stage.instances
         ]
-
         instance_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.instance_descs), dtype=np.uint8).flatten()
 
         self.instance_descs_buffer = device.create_buffer(
@@ -363,9 +388,18 @@ class Scene:
             data=instance_descs_bytes,
         )
 
-        instance_list = device.create_acceleration_structure_instance_list(size=len(stage.instances))
+        self.tlas = Scene._build_tlas(self.device, self.meshes, stage.instances)
 
-        for instance_id, instance in enumerate(stage.instances):
+        texture_loader = spy.TextureLoader(device)
+        self.environment_texture = texture_loader.load_texture(stage.environment)
+
+        self.camera = stage.camera
+
+    @staticmethod
+    def _build_tlas(device: spy.Device, meshes: MeshList, instances: list[Instance]) -> spy.AccelerationStructure:
+        instance_list = device.create_acceleration_structure_instance_list(size=len(instances))
+
+        for instance_id, instance in enumerate(instances):
             instance_list.write(
                 instance_id,
                 {
@@ -374,7 +408,7 @@ class Scene:
                     "instance_mask": 0xff,
                     "instance_contribution_to_hit_group_index": 0,
                     "flags": spy.AccelerationStructureInstanceFlags.none,
-                    "acceleration_structure": self.meshes.blases[instance.mesh_id].handle,
+                    "acceleration_structure": meshes.blases[instance.mesh_id].handle,
                 },
             )
 
@@ -390,7 +424,7 @@ class Scene:
             label="tlas_scratch_buffer",
         )
 
-        self.tlas = device.create_acceleration_structure(
+        tlas = device.create_acceleration_structure(
             size=tlas_sizes.acceleration_structure_size,
             label="tlas",
         )
@@ -398,28 +432,30 @@ class Scene:
         command_encoder = device.create_command_encoder()
         command_encoder.build_acceleration_structure(
             desc=tlas_build_desc,
-            dst=self.tlas,
+            dst=tlas,
             src=None,
             scratch_buffer=tlas_scratch_buffer,
         )
         device.submit_command_buffer(command_encoder.finish())
 
-        texture_loader = spy.TextureLoader(device)
-        self.environment_texture = texture_loader.load_texture(stage.environment)
-
-        self.camera = stage.camera
+        return tlas
 
     def bind(self, cursor: spy.ShaderCursor):
         cursor.tlas = self.tlas
         cursor.environment_map = self.environment_texture
         cursor.instance_descs = self.instance_descs_buffer
+        cursor.variables = self.variables.parameter_buffer
+        cursor.gradient = self.gradient.parameter_buffer
 
         self.meshes.bind(cursor.meshes)
         self.materials.bind(cursor.materials)
         self.camera.bind(cursor.camera)
 
     def zero_grad(self, command_encoder: spy.CommandEncoder):
-        self.materials.zero_grad(command_encoder)
+        command_encoder.clear_buffer(self.gradient.parameter_buffer)
 
     def download(self):
-        self.materials.download()
+        parameters = self.variables.parameter_buffer.to_numpy().view(np.float32)
+        parameters = [float(p) for p in parameters]
+
+        self.materials.update_parameters(parameters)

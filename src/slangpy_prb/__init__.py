@@ -3,7 +3,7 @@ from .material import MaterialParameter, Material, Metals
 from .mesh import Mesh
 from .camera import PerspectiveCamera
 from .stage import Instance, Stage
-from .scene import ShaderTableBuilder, Scene, SceneVariables
+from .scene import ShaderTableBuilder, Scene, SceneShape, SceneVariables
 from .pathtracer import PathTracer
 from .replay_backpropagater import ReplayBackpropagater
-from .gradient_descent import GradientDescent
+from .optimizer import Optimizer, GradientDescent, Adam

@@ -29,7 +29,7 @@ class Material:
 
         for parameter in self.parameters:
             if parameter.requires_grad:
-                loads += f"scene.materials.variables[io.variables_start_index + {variable_counter}],\n"
+                loads += f"scene.variables[io.variables_start_index + {variable_counter}],\n"
                 variable_counter += 1
             else:
                 loads += f"scene.materials.constants[io.constants_start_index + {constant_counter}],\n"
@@ -80,13 +80,13 @@ class Material:
 
         for parameter in self.parameters:
             if parameter.requires_grad:
-                loads += f"DifferentialPair<float> {parameter.name} = diffPair(scene.materials.variables[io.variables_start_index + {variable_counter}]);\n"
+                loads += f"DifferentialPair<float> {parameter.name} = diffPair(scene.variables[io.variables_start_index + {variable_counter}]);\n"
                 stores += f"""
                 if (isfinite({parameter.name}.d)) {{
                     float {parameter.name}_wave = WaveActiveSum({parameter.name}.d);
 
                     if (WaveIsFirstLane()) {{
-                        scene.materials.gradient[io.variables_start_index + {variable_counter}].add({parameter.name}_wave);
+                        scene.gradient[io.variables_start_index + {variable_counter}].add({parameter.name}_wave);
                     }}
                 }}
                 """

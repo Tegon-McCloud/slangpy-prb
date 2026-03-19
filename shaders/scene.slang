@@ -88,8 +88,6 @@ public struct Meshes {
 
 public struct Materials {
     public StructuredBuffer<float> constants;
-    public StructuredBuffer<float> variables;
-    public RWStructuredBuffer<Atomic<float>> gradient;
     public StructuredBuffer<MaterialDesc> descs;
 }
 
@@ -103,6 +101,9 @@ public struct Scene {
     public Materials materials;
 
     public StructuredBuffer<InstanceDesc> instance_descs;
+
+    public StructuredBuffer<float> variables;
+    public RWStructuredBuffer<Atomic<float>> gradient;
 }
 
 public ParameterBlock<Scene> scene;

@@ -1,7 +1,7 @@
 module util;
 
-__include util.random;
 __include util.complex;
+__include util.random;
 __include util.scattering;
 __include util.microfacet;
 

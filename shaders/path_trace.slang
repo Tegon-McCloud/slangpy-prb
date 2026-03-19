@@ -4,11 +4,6 @@ import bsdf;
 
 static const uint max_depth = 8;
 
-struct PathTracer {
-
-    
-}
-
 const uint sample_seed;
 const uint sample_index;
 
