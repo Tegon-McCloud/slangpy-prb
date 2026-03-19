@@ -23,6 +23,16 @@ class ShaderTableBuilder:
         self.callable_entries.append(entry_point_name)
         return index
 
+
+
+class SceneVariables:
+    def __init__(
+        self,
+        device: spy.Device,
+        num_variables: int,
+    ):
+        variables = device.create_buffer(device, dtype=spy.float1, shape=(num_variables,))
+   
 class MeshList:
     @dataclass
     class MeshDesc:
@@ -300,7 +310,15 @@ class MaterialList:
         command_encoder.clear_buffer(self.gradient_buffer)
 
     def download(self):
-        pass
+        variables = self.variables_buffer.to_numpy().view(np.float32)
+        
+        for material, desc in zip(self.materials, self.material_descs):    
+            counter = 0
+
+            for parameter in material.parameters:
+                if parameter.requires_grad:
+                    parameter.value = variables[desc.variables_start_index + counter]
+                    counter += 1    
 
 class Scene:
     @dataclass

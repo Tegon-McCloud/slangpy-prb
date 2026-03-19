@@ -1,6 +1,7 @@
 import random
 
 import slangpy as spy
+from tqdm import tqdm
 
 from . import Scene, ShaderTableBuilder
 
@@ -50,6 +51,31 @@ class ReplayBackpropagater:
             hit_group_names=["triangle_primary", "triangle_occlusion"],
             callable_entry_points=shader_table_builder.callable_entries
         )
+
+    def backpropagate(
+        self,
+        scene: Scene,
+        adjoint: spy.Texture,
+        sample_count: int,
+        error_target: spy.Texture,
+        seed: int | None = None,
+    ):
+        if seed != None:
+            random.seed(seed)
+
+        for _ in tqdm(range(sample_count)):
+            command_encoder = self.device.create_command_encoder()
+
+            self.sample(
+                command_encoder,
+                scene,
+                adjoint,
+                sample_count,
+                error_target,
+            )
+            
+            submit_id = self.device.submit_command_buffer(command_encoder.finish())
+            self.device.wait_for_submit(submit_id)
 
     def sample(
         self,

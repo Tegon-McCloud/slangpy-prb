@@ -2,8 +2,10 @@ Texture2D<float4> primal;
 Texture2D<float4> reference;
 RWTexture2D<float4> adjoint;
 
+const float scale;
+
 float3 l2_adjoint(float3 p, float3 r) {
-    return 2.0 * (p - r);
+    return scale * (p - r);
 }
 
 [shader("compute")]

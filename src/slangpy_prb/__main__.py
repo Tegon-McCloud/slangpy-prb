@@ -39,68 +39,6 @@ class Tonemapper:
         )
 
 
-def render(
-    device: spy.Device,
-    scene: Scene,
-    path_tracer: PathTracer,
-    width: int,
-    height: int,
-    sample_count: int,
-    seed: int | None = None,
-) -> spy.Texture:
-    
-    if seed != None:
-        random.seed(seed)
-
-    render_target = device.create_texture(
-        format=spy.Format.rgba32_float,
-        width=width,
-        height=height,
-        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
-        label="render_target",
-    )
-
-    for sample_index in tqdm(range(sample_count)):
-        command_encoder = device.create_command_encoder()
-
-        path_tracer.sample(
-            command_encoder,
-            scene,
-            render_target,
-            sample_index,
-        )
-        
-        submit_id = device.submit_command_buffer(command_encoder.finish())
-        device.wait_for_submit(submit_id)
-
-    return render_target
-
-def backpropagate(
-    device: spy.Device,
-    scene: Scene,
-    adjoint: spy.Texture,
-    backpropagater: ReplayBackpropagater,
-    sample_count: int,
-    error_target: spy.Texture,
-    seed: int | None = None,
-):
-    if seed != None:
-        random.seed(seed)
-
-
-    for _ in tqdm(range(sample_count)):
-        command_encoder = device.create_command_encoder()
-
-        backpropagater.sample(
-            command_encoder,
-            scene,
-            adjoint,
-            sample_count,
-            error_target,
-        )
-        
-        submit_id = device.submit_command_buffer(command_encoder.finish())
-        device.wait_for_submit(submit_id)
 
 def save_img(img: npt.NDArray, filename: str):
     img = np.clip(img, 0.0, 1.0)
@@ -124,84 +62,67 @@ def tonemap(device: spy.Device, texture: spy.Texture) -> spy.Texture:
 
     return output
 
+class L2Loss:
+
+    def __init__(
+        self,
+        device: spy.Device,
+        reference: spy.Texture,
+    ):
+        super().__init__()
+
+        self.device = device
+        self.reference = reference
+
+        self.adjoint_program = self.device.load_program("shaders/l2_adjoint.slang", ["main"])
+        self.adjoint_kernel = self.device.create_compute_kernel(self.adjoint_program)
+
+        self.scale = 2.0 / (self.reference.width * self.reference.height)
+
+    def adjoint(
+        self,
+        command_encoder: spy.CommandEncoder,
+        primal: spy.Texture,
+        out: spy.Texture,
+    ):
+        self.adjoint_kernel.dispatch(
+            thread_count=[self.reference.width, self.reference.height, 1],
+            vars={
+                "scale": self.scale,
+                "primal": primal,
+                "reference": self.reference,
+                "adjoint": out,
+            },
+            command_encoder=command_encoder,
+        )
+
+def save_callback(iteration: int, scene: Scene, primal: spy.Texture):
+    if iteration % 10 == 0: 
+        save_img(tonemap(primal.device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
+
 def optimize(
     device: spy.Device,
     reference: spy.Texture,
     stage: Stage,
 ):
-    width = reference.width
-    height = reference.height
     
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
 
     path_tracer = PathTracer(device, shader_table_builder)
     backpropagater = ReplayBackpropagater(device, shader_table_builder)
-    
-    error_target = device.create_texture(
-        format=spy.Format.rgba32_float,
-        width=width,
-        height=height,
-        usage=spy.TextureUsage.unordered_access,
-        label="error_target",
+    optimizer = GradientDescent(device)
+    loss = L2Loss(device, reference)
+
+    optimizer.optimize(
+        scene,
+        lambda command_encoder, primal, out: loss.adjoint(command_encoder, primal, out),
+        reference.width,
+        reference.height,
+        path_tracer,
+        backpropagater,
+        save_callback,
     )
-
-    for iteration in tqdm(range(100)):
-
-        primal = render(
-            device,
-            scene,
-            path_tracer,
-            width,
-            height,
-            sample_count=1 << 10,
-        )
-
-        if iteration % 5 == 0:
-            save_img(tonemap(device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
-        
-        reference_arr = reference.to_numpy()
-        primal_arr = primal.to_numpy()
-
-        loss = np.mean((primal_arr - reference_arr)**2)
-        tqdm.write(f"loss: {loss}")
-
-        adjoint_arr = 2 * (primal.to_numpy() - reference.to_numpy()) / (width * height)
-        adjoint = device.create_texture(
-            data=adjoint_arr,
-            format=spy.Format.rgba32_float,
-            width=width,
-            height=height,
-            usage=spy.TextureUsage.shader_resource,
-            label="adjoint",
-        )
-        if iteration % 5 == 0:
-           save_img(width * height * adjoint_arr[:,:,0:3], f"./output/adjoint_{iteration:02}.png")
-
-        command_encoder = device.create_command_encoder()
-        scene.zero_grad(command_encoder)
-        device.submit_command_buffer(command_encoder.finish())
-
-        backpropagate(
-            device,
-            scene,
-            adjoint,
-            backpropagater,
-            sample_count=1 << 10,
-            error_target=error_target,
-        )
-
-        value = scene.materials.variables_buffer.to_numpy().view(np.float32)
-        gradient = scene.materials.gradient_buffer.to_numpy().view(np.float32)
-
-        tqdm.write(f"value: {value}")
-        tqdm.write(f"gradient: {gradient}")
-
-        value[0:gradient.shape[0]] -= 0.5 * gradient
-
-        scene.materials.variables_buffer.copy_from_numpy(value)
-
-        save_img(error_target.to_numpy()[:,:,0:3], f"./output/error.png")
 
     scene.download()
 
@@ -236,10 +157,8 @@ def plot_loss(
         path_tracer = PathTracer(device, shader_table_builder)
         backpropagater = ReplayBackpropagater(device, shader_table_builder)
     
-        primal = render(
-            device,
+        primal = path_tracer.render(
             scene,
-            path_tracer,
             width=reference.width,
             height=reference.height,
             sample_count=1 << 10,
@@ -262,7 +181,7 @@ def plot_loss(
         scene.zero_grad(command_encoder)
         device.submit_command_buffer(command_encoder.finish())
         
-        backpropagate(
+        backpropagater.backpropagate(
             device,
             scene,
             adjoint,
@@ -309,10 +228,8 @@ def main():
     scene = Scene(device, stage, shader_table_builder)
     path_tracer = PathTracer(device, shader_table_builder)
 
-    reference = render(
-        device,
+    reference = path_tracer.render(
         scene,
-        path_tracer,
         width,
         height,
         sample_count=1 << 10,
@@ -321,11 +238,11 @@ def main():
 
     save_img(tonemap(device, reference).to_numpy(), "./output/reference.png")
 
-    # plot_loss(device, reference, stage)
-
     # stage.replace_material(0, Material.lambertian(color=spy.float3(0.5, 0.5, 0.5), color_requires_grad=True))
     # stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.5, True)))
     stage.replace_material(0, Metals.copper(roughness=0.8, requires_grad=True))
+
+
 
     optimize(
         device,
@@ -333,6 +250,8 @@ def main():
         stage,
     )
 
+    values = [p.value for p in stage.get_material(0).parameters]
+    print(f"parameters: {values}")
 
 if __name__ == "__main__":
     main()
