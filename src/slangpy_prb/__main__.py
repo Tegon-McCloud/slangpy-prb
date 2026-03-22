@@ -1,4 +1,3 @@
-import random
 import pathlib
 
 import numpy as np
@@ -6,7 +5,8 @@ import numpy.typing as npt
 import slangpy as spy
 from PIL import Image
 from tqdm import tqdm
-import json
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 
 from . import *
 
@@ -74,10 +74,39 @@ class L2Loss:
         self.device = device
         self.reference = reference
 
+        self.loss_program = self.device.load_program("shaders/l2_loss.slang", ["main"])
+        self.loss_kernel = self.device.create_compute_kernel(self.loss_program)
+
         self.adjoint_program = self.device.load_program("shaders/l2_adjoint.slang", ["main"])
         self.adjoint_kernel = self.device.create_compute_kernel(self.adjoint_program)
 
-        self.scale = 2.0 / (self.reference.width * self.reference.height)
+        self.out_buffer = self.device.create_buffer(
+            size=4,
+            usage=spy.BufferUsage.unordered_access,
+            label="out_buffer",
+        )
+
+
+    def loss(
+        self,
+        primal: spy.Texture,
+    ) -> float:
+        command_encoder = self.device.create_command_encoder()
+        command_encoder.clear_buffer(self.out_buffer)
+        self.loss_kernel.dispatch(
+            thread_count=[self.reference.width, self.reference.height, 1],
+            vars={
+                "primal": primal,
+                "reference": self.reference,
+                "out": self.out_buffer,
+            },
+            command_encoder=command_encoder,
+        )
+        self.device.submit_command_buffer(command_encoder.finish())
+        
+        l = float(self.out_buffer.to_numpy().view(np.float32)[0])
+        return l / (3 * self.reference.width * self.reference.height)
+
 
     def adjoint(
         self,
@@ -88,7 +117,7 @@ class L2Loss:
         self.adjoint_kernel.dispatch(
             thread_count=[self.reference.width, self.reference.height, 1],
             vars={
-                "scale": self.scale,
+                "scale":  2.0 / (3.0 * self.reference.width * self.reference.height),
                 "primal": primal,
                 "reference": self.reference,
                 "adjoint": out,
@@ -161,18 +190,46 @@ def optimize(
         
         if iteration % 5 == 0:
             values = scene.variables.parameter_buffer.to_numpy().view(np.float32)
-            print(f"parameters: {values}")
+            tqdm.write(f"parameters: {values}")
             save_img(tonemap(primal.device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
 
     scene.download()
 
 def plot_loss(
     device: spy.Device,
-    reference: spy.Texture,
+    width: int,
+    height: int,
     stage: Stage,
 ): 
-    width = reference.width
-    height = reference.height
+    
+    # material = Metals.gold(roughness=0.4, requires_grad=True)
+    # variable_index = 6
+    material = Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.4, True))
+    variable_index = 0
+    stage.replace_material(0, material)
+
+    shader_table_builder = ShaderTableBuilder()
+    scene = Scene(device, stage, shader_table_builder)
+    path_tracer = PathTracer(device, shader_table_builder)
+    backpropagater = ReplayBackpropagater(device, shader_table_builder)
+
+    reference = path_tracer.render(
+        scene,
+        width,
+        height,
+        sample_count=1 << 10,
+        seed=1234,
+    )
+
+    loss = L2Loss(device, reference)
+
+    adjoint = device.create_texture(
+        format=spy.Format.rgba32_float,
+        width=width,
+        height=height,
+        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
+        label="adjoint",
+    )
 
     error_target = device.create_texture(
         format=spy.Format.rgba32_float,
@@ -182,20 +239,17 @@ def plot_loss(
         label="error_target",
     )
 
-    reference_arr = reference.to_numpy()
-    n = 2
+    n = 100
 
-    roughness = np.linspace(0.2, 0.6, num=n, endpoint=True, dtype=np.float32)
-    loss = np.empty(shape=n, dtype=np.float32)
-    gradient = np.empty(shape=n, dtype=np.float32)
+    values = np.linspace(0.01, 1.0, num=n, endpoint=True, dtype=np.float32)
+    losses = np.empty(shape=n, dtype=np.float32)
+    gradients = np.empty(shape=n, dtype=np.float32)
 
     for i in tqdm(range(n)):
-        # stage.replace_material(0, MicrofacetDielectricMaterial(ior=1.5, roughness=roughness[i], requires_grad=True))
-
-        shader_table_builder = ShaderTableBuilder()
-        scene = Scene(device, stage, shader_table_builder)
-        path_tracer = PathTracer(device, shader_table_builder)
-        backpropagater = ReplayBackpropagater(device, shader_table_builder)
+        
+        variables = scene.variables.parameter_buffer.to_numpy().view(np.float32)
+        variables[variable_index] = values[i]
+        scene.variables.parameter_buffer.copy_from_numpy(variables)
     
         primal = path_tracer.render(
             scene,
@@ -204,44 +258,93 @@ def plot_loss(
             sample_count=1 << 10,
         )
 
-        primal_arr = primal.to_numpy()
-        loss[i] = np.mean((primal_arr - reference_arr)**2)
-
-        adjoint_arr = 2 * (primal.to_numpy() - reference.to_numpy()) / (width * height)
-        adjoint = device.create_texture(
-            data=adjoint_arr,
-            format=spy.Format.rgba32_float,
-            width=width,
-            height=height,
-            usage=spy.TextureUsage.shader_resource,
-            label="adjoint",
-        )
+        losses[i] = loss.loss(primal)
 
         command_encoder = device.create_command_encoder()
         scene.zero_grad(command_encoder)
+        loss.adjoint(command_encoder, primal, adjoint)
         device.submit_command_buffer(command_encoder.finish())
         
         backpropagater.backpropagate(
-            device,
             scene,
             adjoint,
-            backpropagater,
             sample_count=1 << 10,
             error_target=error_target,
         )
+        save_img(error_target.to_numpy()[:,:,0:3], f"./output/error.png")
 
-        scene_gradient = scene.materials.gradient_buffer.to_numpy().view(np.float32)
+        scene_gradient = scene.gradient.parameter_buffer.to_numpy().view(np.float32)
 
-        gradient[i] = scene_gradient[1]
+        gradients[i] = scene_gradient[variable_index]
 
-    json.dump(
-        {
-            "roughness": roughness.tolist(),
-            "loss": loss.tolist(),
-            "gradient": gradient.tolist(),
-        },
-        open("output/loss_over_roughness.json", 'w'),
+    with open("output/losses.npz", "wb") as f:
+        np.savez(f, values=values, losses=losses, gradients=gradients)
+
+
+def bsdf_scatter(device: spy.Device):
+    module = spy.Module.load_from_file(device, "shaders/bsdf.slang")
+
+    n = 1 << 9
+    theta = 1.6
+    phi = -np.pi / 4.0
+
+    wo = spy.float3(np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta))
+    wi = spy.NDBuffer(device, shape=(n,), dtype=spy.float3)
+    pdf = np.empty(shape=(n,), dtype=np.float32)
+
+    rng = np.random.default_rng(seed=12345)
+    rand_state = rng.integers(0xffffffff, endpoint=True, size=(n,), dtype=np.uint32)
+    
+    bsdf: spy.NDBuffer = module.sample_microfacet_dielectric_ss(
+        wo,
+        wi,
+        pdf,
+        rand_state,
+        1.5,
+        0.4,
     )
+
+    wi = wi.to_numpy()
+    bsdf = bsdf.to_numpy()
+
+    mask = (wi[:,0] > 0.0) | (wi[:,1] > 0.0) | (wi[:,2] > 0.0)
+    wi = wi[mask,:]
+    pdf = pdf[mask]
+    bsdf = bsdf[mask]
+
+    bsdf_eval: spy.NDBuffer = module.evaluate_microfacet_dielectric_ss(
+        wo,
+        wi,
+        1.5,
+        0.4,
+    )
+
+    bsdf_eval = bsdf_eval.to_numpy()
+
+    error = (bsdf - bsdf_eval) / bsdf
+
+    print(np.median(error[~np.isnan(error)]))
+
+    mean_bsdf = np.mean(bsdf, axis=1)
+    weight = mean_bsdf / pdf
+
+    print(wi.shape)
+    print(np.max(weight))
+
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+    ax.set_xlim(-1.0, 1.0)
+    ax.set_ylim(-1.0, 1.0)
+    ax.set_zlim(-1.0, 1.0)
+    ax.set_xlabel("$t$")
+    ax.set_ylabel("$b$")
+    ax.set_zlabel("$n$")
+    
+    ax.plot([0.0, wo.x], [0.0, wo.y], [0.0, wo.z], color='black')
+    ax.scatter(wi[:,0], wi[:,1], wi[:,2], c=weight/np.max(weight), cmap='jet')
+
+    fig.savefig("output/bsdf_samples.pdf")
+
 
 def main():
     device = spy.create_device(
@@ -250,6 +353,8 @@ def main():
         enable_print=True,
         type=spy.DeviceType.vulkan,
     )
+
+    # bsdf_scatter(device)
 
     width = 960
     height = 540
@@ -260,9 +365,11 @@ def main():
 
     stage.load_gltf("./assets/XYZRGBDragon.glb")
 
+    # plot_loss(device, width, height, stage)
+
     # stage.replace_material(0, Material.lambertian(color=spy.float3(0.8, 0.2, 0.2)))
-    stage.replace_material(0, Metals.gold(roughness=0.4))
-    # stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=0.4))
+    # stage.replace_material(0, Metals.gold(roughness=0.4))
+    stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=0.4))
 
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
@@ -279,8 +386,8 @@ def main():
     save_img(tonemap(device, reference).to_numpy(), "./output/reference.png")
 
     # stage.replace_material(0, Material.lambertian(color=spy.float3(0.5, 0.5, 0.5), color_requires_grad=True))
-    # stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.5, True)))
-    stage.replace_material(0, Metals.copper(roughness=0.8, requires_grad=True))
+    # stage.replace_material(0, Metals.copper(roughness=0.8, requires_grad=True))
+    stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.5, True)))
 
     optimize(
         device,

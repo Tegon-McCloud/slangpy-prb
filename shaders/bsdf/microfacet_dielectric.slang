@@ -103,21 +103,25 @@ public float3 sample_microfacet_dielectric_ss(
         // check that we didn't switch side of the surface during reflection
         if ((wi.z > 0.0) != (wo.z > 0.0)) {
             wi = float3(0.0);
+            pdf = 0.0;
+            return float3(0.0);
         }
 
         fresnel = reflectance;
         pdf = fresnel * vndf / (4.0 * cos_theta_om);
         cosines = 1.0 / (4.0 * abs(wo.z));
     } else {
-
+        
         wi = (ior * cos_theta_om - cos_theta_tm) * wm - ior * wo;
         
         // check that we switched side of the surface during refraction
         if ((wi.z > 0.0) == (wo.z > 0.0)) {
             wi = float3(0.0);
+            pdf = 0.0;
+            return float3(0.0);
         }
         
-        float denom = sq(cos_theta_tm + ior * cos_theta_om);
+        float denom = sq(-cos_theta_tm + ior * cos_theta_om);
         float jacobian = cos_theta_tm / denom;
         fresnel = 1.0 - reflectance;
         pdf = fresnel * vndf * jacobian;
@@ -125,6 +129,7 @@ public float3 sample_microfacet_dielectric_ss(
     }
 
     float geometry = masking_shadowing_ggx(wo, wi, alpha);
+
 
     return fresnel * ndf * geometry * cosines;
 }

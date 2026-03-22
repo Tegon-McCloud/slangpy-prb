@@ -1,12 +1,10 @@
+import util;
+
 Texture2D<float4> primal;
 Texture2D<float4> reference;
-RWTexture2D<float4> adjoint;
+RWStructuredBuffer<Atomic<float>> out;
 
 const float scale;
-
-float3 l2_adjoint(float3 p, float3 r) {
-    return scale * (p - r);
-}
 
 uint2 dimensions() {
     uint2 dim;
@@ -26,9 +24,13 @@ void main(uint3 tid: SV_DispatchThreadID) {
 
     float3 p = primal[pixel].rgb;
     float3 r = reference[pixel].rgb;
-    float3 a = l2_adjoint(p, r);
+    float l = dot(p - r, p - r);
 
-    adjoint[pixel] = float4(a, 1.0);
+    float l_wave = WaveActiveSum(l);
+
+    if (WaveIsFirstLane()) {
+        out[0] += l_wave;
+    }
 }
 
 

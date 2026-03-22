@@ -11,37 +11,13 @@ Texture2D<float4> adjoint;
 
 RWTexture2D<float4> error_target;
 
-RayTraceResponse trace_ray(Ray ray, float tmin, float tmax) {
-    RayDesc ray_desc;
-
-    ray_desc.Origin = ray.origin;
-    ray_desc.Direction = ray.direction;
-    ray_desc.TMin = tmin;
-    ray_desc.TMax = tmax;
-
-    RayTraceResponse response;
-
-    TraceRay(
-        scene.tlas,
-        0,
-        0xff,
-        0, /* RayContributionToHitGroupIndex */
-        0, /* MultiplierForGeometryContributionHitGroupIndex */
-        0, /* MissShaderIndex */
-        ray_desc,
-        response,
-    );
-
-    return response;
-}
-
 float3 sample_path(Ray ray, inout uint rand_state, out uint depth) {
 
     float3 radiance = float3(0.0);
     float3 throughput = float3(1.0);
 
     for (depth = 0; depth < max_depth; depth++) {
-        RayTraceResponse response = trace_ray(ray, 1e-3, 1e10);
+        RayTraceResponse response = scene.trace_ray(ray, 1e-3, 1e10);
 
         if (!response.isHit) {
             radiance = throughput * response.miss.radiance;
@@ -66,6 +42,10 @@ float3 sample_path(Ray ray, inout uint rand_state, out uint depth) {
             error_state,
         );
 
+        if (all(wi == float3(0.0))) {
+            break;
+        }
+
         throughput *= bsdf_value / bsdf_pdf;
 
         ray.origin = ray.origin + hit.distance * ray.direction;
@@ -81,7 +61,7 @@ void sample_path_adjoint(Ray ray, float3 radiance, float3 adjoint_radiance, inou
 
     for (depth = 0; depth < max_depth; depth++) {
         
-        RayTraceResponse response = trace_ray(ray, 1e-3, 1e10);
+        RayTraceResponse response = scene.trace_ray(ray, 1e-3, 1e10);
 
         if (!response.isHit) {
             break;
@@ -104,6 +84,10 @@ void sample_path_adjoint(Ray ray, float3 radiance, float3 adjoint_radiance, inou
             rand_state,
             error_state,
         );
+
+        if (all(wi == float3(0.0))) {
+            break;
+        }
 
         if (material_desc.requires_grad != 0) {
 

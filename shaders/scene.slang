@@ -104,6 +104,30 @@ public struct Scene {
 
     public StructuredBuffer<float> variables;
     public RWStructuredBuffer<Atomic<float>> gradient;
+
+    public RayTraceResponse trace_ray(Ray ray, float tmin, float tmax) {
+        RayDesc ray_desc;
+
+        ray_desc.Origin = ray.origin;
+        ray_desc.Direction = ray.direction;
+        ray_desc.TMin = tmin;
+        ray_desc.TMax = tmax;
+
+        RayTraceResponse response;
+
+        TraceRay(
+            tlas,
+            0,
+            0xff,
+            0, /* RayContributionToHitGroupIndex */
+            0, /* MultiplierForGeometryContributionHitGroupIndex */
+            0, /* MissShaderIndex */
+            ray_desc,
+            response,
+        );
+
+        return response;
+    }
 }
 
 public ParameterBlock<Scene> scene;

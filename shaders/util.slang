@@ -36,6 +36,12 @@ public float sq(float x) {
     return x * x;
 }
 
+[ForceInline]
+[Differentiable]
+public vector<float, n> sq<let n : int>(vector<float, n> x) {
+    return x * x;
+}
+
 public float3x3 make_tbn_matrix(float3 normal) {
     float signbit = sign(normal.z + 1.0e-16f);
     float a = -1.0f / (1.0f + abs(normal.z));
