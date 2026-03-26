@@ -98,7 +98,7 @@ class PathTracer:
         with command_encoder.begin_ray_tracing_pass() as pass_encoder:
             shader_object = pass_encoder.bind_pipeline(self.pipeline, self.shader_table)
             cursor = spy.ShaderCursor(shader_object)
-
+            
             cursor.sample_seed = random.getrandbits(32)
             cursor.sample_index = sample_index
             cursor.render_target = render_target

@@ -1,11 +1,12 @@
 import pathlib
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
 import slangpy as spy
-from PIL import Image
+
 from tqdm import tqdm
-import matplotlib as mpl
+import imageio.v3 as iio
 import matplotlib.pyplot as plt
 
 from . import *
@@ -44,7 +45,7 @@ def save_img(img: npt.NDArray, filename: str):
     img = np.clip(img, 0.0, 1.0)
     img = (img * 255).astype(np.uint8)
     
-    Image.fromarray(img).save(filename) 
+    iio.imwrite(filename, img) 
 
 def tonemap(device: spy.Device, texture: spy.Texture) -> spy.Texture:
     tonemapper = Tonemapper(device)
@@ -146,6 +147,12 @@ def optimize(
         scene.gradient,
         learning_rate=0.1,
     )
+    # optimizer = GradientDescent(
+    #     device,
+    #     scene.variables,
+    #     scene.gradient,
+    #     learning_rate=0.5,
+    # )
 
     adjoint = device.create_texture(
         format=spy.Format.rgba32_float,
@@ -162,14 +169,19 @@ def optimize(
         usage=spy.TextureUsage.unordered_access,
         label="error_target",
     )
+
+    n = 100
+    losses = np.empty(shape=(n,), dtype=np.float32)
     
-    for iteration in tqdm(range(25)):
+    for iteration in tqdm(range(n)):
         primal = renderer.render(
             scene,
             width,
             height,
             sample_count=1 << 10,
         )
+
+        losses[iteration] = loss.loss(primal)
 
         command_encoder = device.create_command_encoder()
         scene.zero_grad(command_encoder)
@@ -193,9 +205,11 @@ def optimize(
             tqdm.write(f"parameters: {values}")
             save_img(tonemap(primal.device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
 
+    with open("output/loss_over_iteration.npy", "wb") as f:
+        np.save(f, losses)
     scene.download()
 
-def plot_loss(
+def loss_over_roughness(
     device: spy.Device,
     width: int,
     height: int,
@@ -206,7 +220,7 @@ def plot_loss(
     # variable_index = 6
     material = Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.4, True))
     variable_index = 0
-    stage.replace_material(0, material)
+    stage.replace_material(MaterialId(0), material)
 
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
@@ -277,7 +291,7 @@ def plot_loss(
 
         gradients[i] = scene_gradient[variable_index]
 
-    with open("output/losses.npz", "wb") as f:
+    with open("output/loss_over_roughness.npz", "wb") as f:
         np.savez(f, values=values, losses=losses, gradients=gradients)
 
 
@@ -295,7 +309,7 @@ def bsdf_scatter(device: spy.Device):
     rng = np.random.default_rng(seed=12345)
     rand_state = rng.integers(0xffffffff, endpoint=True, size=(n,), dtype=np.uint32)
     
-    bsdf: spy.NDBuffer = module.sample_microfacet_dielectric_ss(
+    bsdf_buffer: spy.NDBuffer = module.sample_microfacet_dielectric_ss(
         wo,
         wi,
         pdf,
@@ -305,21 +319,21 @@ def bsdf_scatter(device: spy.Device):
     )
 
     wi = wi.to_numpy()
-    bsdf = bsdf.to_numpy()
+    bsdf = bsdf_buffer.to_numpy()
 
     mask = (wi[:,0] > 0.0) | (wi[:,1] > 0.0) | (wi[:,2] > 0.0)
     wi = wi[mask,:]
     pdf = pdf[mask]
     bsdf = bsdf[mask]
 
-    bsdf_eval: spy.NDBuffer = module.evaluate_microfacet_dielectric_ss(
+    bsdf_eval_buffer: spy.NDBuffer = module.evaluate_microfacet_dielectric_ss(
         wo,
         wi,
         1.5,
         0.4,
     )
 
-    bsdf_eval = bsdf_eval.to_numpy()
+    bsdf_eval = bsdf_eval_buffer.to_numpy()
 
     error = (bsdf - bsdf_eval) / bsdf
 
@@ -341,7 +355,7 @@ def bsdf_scatter(device: spy.Device):
     ax.set_zlabel("$n$")
     
     ax.plot([0.0, wo.x], [0.0, wo.y], [0.0, wo.z], color='black')
-    ax.scatter(wi[:,0], wi[:,1], wi[:,2], c=weight/np.max(weight), cmap='jet')
+    ax.scatter(wi[:,0], wi[:,1], cast(Any, wi[:,2]), c=weight/np.max(weight), cmap='jet')
 
     fig.savefig("output/bsdf_samples.pdf")
 
@@ -353,23 +367,25 @@ def main():
         enable_print=True,
         type=spy.DeviceType.vulkan,
     )
-
+    
     # bsdf_scatter(device)
 
     width = 960
     height = 540
 
-    stage = Stage(
-        environment=spy.Bitmap.load_from_file("./assets/kloppenheim_06_puresky_4k.hdr"),
-    )
+    stage = Stage()
 
     stage.load_gltf("./assets/XYZRGBDragon.glb")
+
+    environment_image = iio.imread("assets/kloppenheim_06_puresky_4k.hdr")
+    environment_id = stage.add_texture(Texture(environment_image))
+    stage.set_environment(environment_id)
 
     # plot_loss(device, width, height, stage)
 
     # stage.replace_material(0, Material.lambertian(color=spy.float3(0.8, 0.2, 0.2)))
-    # stage.replace_material(0, Metals.gold(roughness=0.4))
-    stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=0.4))
+    stage.replace_material(MaterialId(0), Metals.gold(roughness=0.4))
+    # stage.replace_material(MaterialId(0), Material.microfacet_dielectric_ss(ior=1.5, roughness=0.4))
 
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
@@ -386,8 +402,8 @@ def main():
     save_img(tonemap(device, reference).to_numpy(), "./output/reference.png")
 
     # stage.replace_material(0, Material.lambertian(color=spy.float3(0.5, 0.5, 0.5), color_requires_grad=True))
-    # stage.replace_material(0, Metals.copper(roughness=0.8, requires_grad=True))
-    stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.5, True)))
+    stage.replace_material(MaterialId(0), Metals.copper(roughness=0.8, requires_grad=True))
+    # stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.5, True)))
 
     optimize(
         device,
@@ -395,7 +411,7 @@ def main():
         stage,
     )
 
-    values = [p.value for p in stage.get_material(0).parameters]
+    values = [p.value for p in stage.get_material(MaterialId(0)).parameters]
     print(f"parameters: {values}")
 
 

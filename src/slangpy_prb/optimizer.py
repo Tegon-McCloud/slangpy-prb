@@ -1,7 +1,5 @@
 import slangpy as spy
 
-import numpy as np
-
 from . import SceneVariables
 
 class Optimizer:
@@ -83,7 +81,6 @@ class Adam(Optimizer):
                     "beta2": self.beta2,
                     "scale2": 1.0 / (1.0 - self.beta2 ** self.step_counter), 
                     "epsilon": self.epsilon,
-
                 },
                 "variables": self.variables.parameter_buffer,
                 "gradient": self.gradient.parameter_buffer,

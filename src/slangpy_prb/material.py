@@ -1,6 +1,6 @@
 import struct
 import math
-from typing import Any
+from typing import Any, cast
 from dataclasses import dataclass, field
 
 import slangpy as spy
@@ -113,12 +113,12 @@ class Material:
         """
     
     @staticmethod
-    def _standardize_parameter(
-        x: Any | tuple[Any, bool],
-    ) -> tuple[Any, bool]:
+    def _standardize_parameter[T](
+        x: T | tuple[Any, bool],
+    ) -> tuple[T, bool]:
         if isinstance(x, tuple) and len(x) == 2 and isinstance(x[1], bool):
             return x
-        return (x, False)
+        return (cast(T, x), False)
 
     @staticmethod
     def lambertian(

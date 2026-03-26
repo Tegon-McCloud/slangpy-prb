@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import numpy as np
-import numpy.typing as npt
 import slangpy as spy
 
 from . import Stage, Mesh, Material, Instance
@@ -195,8 +194,6 @@ class MeshList:
         cursor.indices = self.index_buffer
         cursor.descs = self.mesh_desc_buffer
 
-
-
 class MaterialList:
     @dataclass
     class MaterialDesc:
@@ -358,12 +355,33 @@ class Scene:
 
         variables_builder = SceneVariablesBuilder()
 
+        self.textures: list[spy.Texture] = []
+        self.texture_views: list[spy.TextureView] = []
+
+        for i, stage_texture in enumerate(stage.textures):
+            texture = device.create_texture(
+                type=spy.TextureType.texture_2d,
+                format=stage_texture.format,
+                width=stage_texture.width,
+                height=stage_texture.height,
+                usage=spy.TextureUsage.shader_resource,
+                mip_count=1,
+                label=f"textures[{i}]",
+                data=stage_texture.image,
+            )
+            texture_view = texture.create_view()
+
+            self.textures.append(texture)
+            self.texture_views.append(texture_view)
+        
+        self.environment_index = int(self.stage.environment)
+
         self.meshes = MeshList(
             self.device,
             self.stage.meshes,
             shader_table_builder,
         )
-        
+
         self.materials = MaterialList(
             self.device,
             self.stage.materials,
@@ -389,10 +407,6 @@ class Scene:
         )
 
         self.tlas = Scene._build_tlas(self.device, self.meshes, stage.instances)
-
-        texture_loader = spy.TextureLoader(device)
-        self.environment_texture = texture_loader.load_texture(stage.environment)
-
         self.camera = stage.camera
 
     @staticmethod
@@ -442,10 +456,11 @@ class Scene:
 
     def bind(self, cursor: spy.ShaderCursor):
         cursor.tlas = self.tlas
-        cursor.environment_map = self.environment_texture
         cursor.instance_descs = self.instance_descs_buffer
         cursor.variables = self.variables.parameter_buffer
-        cursor.gradient = self.gradient.parameter_buffer
+        cursor.gradient = self.gradient.parameter_buffer 
+
+        cursor.environment_map = self.texture_views[self.environment_index].descriptor_handle_ro
 
         self.meshes.bind(cursor.meshes)
         self.materials.bind(cursor.materials)

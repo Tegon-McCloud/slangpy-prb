@@ -93,17 +93,19 @@ public struct Materials {
 
 public struct Scene {
     public RaytracingAccelerationStructure tlas;
-    public Texture2D<float3> environment_map;
-    public SamplerState environment_sampler;
-
+    
     public PerspectiveCamera camera;
     public Meshes meshes;
+    public StructuredBuffer<Texture2D.Handle> textures; 
     public Materials materials;
-
+    
     public StructuredBuffer<InstanceDesc> instance_descs;
-
+    
     public StructuredBuffer<float> variables;
     public RWStructuredBuffer<Atomic<float>> gradient;
+    
+    public SamplerState environment_sampler;
+    public Texture2D.Handle environment_map;
 
     public RayTraceResponse trace_ray(Ray ray, float tmin, float tmax) {
         RayDesc ray_desc;
@@ -131,5 +133,3 @@ public struct Scene {
 }
 
 public ParameterBlock<Scene> scene;
-
-
