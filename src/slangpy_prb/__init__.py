@@ -7,7 +7,9 @@ from .stage import Instance, Stage, MeshId, TextureId, MaterialId, InstanceId
 from .scene import ShaderTableBuilder, Scene, SceneShape, SceneVariables
 from .pathtracer import PathTracer
 from .replay_backpropagater import ReplayBackpropagater
+from .loss import L2Loss
 from .optimizer import Optimizer, GradientDescent, Adam
+from .tonemapper import Tonemapper
 
 import imageio
 imageio.plugins.freeimage.download()

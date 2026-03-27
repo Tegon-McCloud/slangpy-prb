@@ -11,36 +11,6 @@ import matplotlib.pyplot as plt
 
 from . import *
 
-class Tonemapper:
-
-    def __init__(
-        self,
-        device: spy.Device,
-    ):
-        self.device = device
-        self.program = self.device.load_program("tonemap.slang", ["main"])
-
-        self.kernel = self.device.create_compute_kernel(self.program)
-
-    def tonemap(
-        self,
-        command_encoder: spy.CommandEncoder,
-        input: spy.Texture,
-        output: spy.Texture,    
-    ):
-        self.kernel.dispatch(
-            thread_count=[output.width, output.height, 1],
-            vars={
-                "tonemapper": {
-                    "input": input,
-                    "output": output,
-                },
-            },
-            command_encoder=command_encoder,
-        )
-
-
-
 def save_img(img: npt.NDArray, filename: str):
     img = np.clip(img, 0.0, 1.0)
     img = (img * 255).astype(np.uint8)
@@ -62,70 +32,6 @@ def tonemap(device: spy.Device, texture: spy.Texture) -> spy.Texture:
     device.submit_command_buffer(command_encoder.finish())
 
     return output
-
-class L2Loss:
-
-    def __init__(
-        self,
-        device: spy.Device,
-        reference: spy.Texture,
-    ):
-        super().__init__()
-
-        self.device = device
-        self.reference = reference
-
-        self.loss_program = self.device.load_program("shaders/l2_loss.slang", ["main"])
-        self.loss_kernel = self.device.create_compute_kernel(self.loss_program)
-
-        self.adjoint_program = self.device.load_program("shaders/l2_adjoint.slang", ["main"])
-        self.adjoint_kernel = self.device.create_compute_kernel(self.adjoint_program)
-
-        self.out_buffer = self.device.create_buffer(
-            size=4,
-            usage=spy.BufferUsage.unordered_access,
-            label="out_buffer",
-        )
-
-
-    def loss(
-        self,
-        primal: spy.Texture,
-    ) -> float:
-        command_encoder = self.device.create_command_encoder()
-        command_encoder.clear_buffer(self.out_buffer)
-        self.loss_kernel.dispatch(
-            thread_count=[self.reference.width, self.reference.height, 1],
-            vars={
-                "primal": primal,
-                "reference": self.reference,
-                "out": self.out_buffer,
-            },
-            command_encoder=command_encoder,
-        )
-        self.device.submit_command_buffer(command_encoder.finish())
-        
-        l = float(self.out_buffer.to_numpy().view(np.float32)[0])
-        return l / (3 * self.reference.width * self.reference.height)
-
-
-    def adjoint(
-        self,
-        command_encoder: spy.CommandEncoder,
-        primal: spy.Texture,
-        out: spy.Texture,
-    ):
-        self.adjoint_kernel.dispatch(
-            thread_count=[self.reference.width, self.reference.height, 1],
-            vars={
-                "scale":  2.0 / (3.0 * self.reference.width * self.reference.height),
-                "primal": primal,
-                "reference": self.reference,
-                "adjoint": out,
-            },
-            command_encoder=command_encoder,
-        )
-
 
 def optimize(
     device: spy.Device,
@@ -288,7 +194,6 @@ def loss_over_roughness(
         save_img(error_target.to_numpy()[:,:,0:3], f"./output/error.png")
 
         scene_gradient = scene.gradient.parameter_buffer.to_numpy().view(np.float32)
-
         gradients[i] = scene_gradient[variable_index]
 
     with open("output/loss_over_roughness.npz", "wb") as f:
@@ -321,7 +226,7 @@ def bsdf_scatter(device: spy.Device):
     wi = wi.to_numpy()
     bsdf = bsdf_buffer.to_numpy()
 
-    mask = (wi[:,0] > 0.0) | (wi[:,1] > 0.0) | (wi[:,2] > 0.0)
+    mask = (wi[:,0] != 0.0) | (wi[:,1] != 0.0) | (wi[:,2] != 0.0)
     wi = wi[mask,:]
     pdf = pdf[mask]
     bsdf = bsdf[mask]
