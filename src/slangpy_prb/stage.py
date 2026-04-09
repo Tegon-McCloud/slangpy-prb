@@ -1,7 +1,7 @@
 import pathlib
 import io
 from dataclasses import dataclass
-from typing import NewType, cast
+from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -10,26 +10,20 @@ import imageio.v3 as iio
 import pygltflib
 from pygltflib import GLTF2
 
+from . import VariableId, TextureId, MeshId, MaterialId, InstanceId, \
+    Transform, PerspectiveCamera, Mesh, Texture, Material
 
-from . import Transform, PerspectiveCamera, Mesh, Texture, Material
+@dataclass
+class Variable:
+    value: float
+    range: tuple[float, float]
 
-MeshId = NewType("MeshId", int)
-MaterialId = NewType("MaterialId", int)
-InstanceId = NewType("InstanceId", int)
-TextureId = NewType("TextureId", int)
-
+@dataclass
 class Instance:
-    def __init__(
-        self,
-        mesh_id: int,
-        material_id: int,
-        transform: Transform,
-    ):
-        super().__init__()
-        self.mesh_id = mesh_id
-        self.material_id = material_id
-        self.transform = transform
-
+    mesh_id: MeshId
+    material_id: MaterialId
+    transform: Transform
+    
 @dataclass 
 class GltfMeshDescriptor:
     mesh_ids: list[MeshId]
@@ -42,12 +36,23 @@ class GltfTextureDescriptor:
 class Stage:
     def __init__(self):
         super().__init__()
-        self.meshes: list[Mesh] = []
+        self.variables: list[Variable] = []
         self.textures: list[Texture] = []
+        self.meshes: list[Mesh] = []
         self.materials: list[Material] = []
         self.instances: list[Instance] = []
         self.camera = PerspectiveCamera()
         self.environment: TextureId | None = None
+
+    def add_variable(self, variable: Variable) -> VariableId:
+        variable_id = VariableId(len(self.variables))
+        self.variables.append(variable)
+        return variable_id
+
+    def add_texture(self, texture: Texture) -> TextureId:
+        texture_id = TextureId(len(self.textures))
+        self.textures.append(texture)
+        return texture_id
 
     def add_mesh(self, mesh: Mesh) -> MeshId:
         mesh_id = MeshId(len(self.meshes))
@@ -60,20 +65,17 @@ class Stage:
         return material_id
     
     def get_material(self, material_id: MaterialId) -> Material:
-        return self.materials[material_id]
+        return self.materials[material_id.index]
     
     def replace_material(self, material_id: MaterialId, material: Material):
-        self.materials[material_id] = material
+        self.materials[material_id.index] = material
 
     def add_instance(self, instance: Instance) -> InstanceId:
         instance_id = InstanceId(len(self.instances))
         self.instances.append(instance)
         return instance_id
-    
-    def add_texture(self, texture: Texture) -> TextureId:
-        texture_id = TextureId(len(self.textures))
-        self.textures.append(texture)
-        return texture_id
+
+
 
     def set_environment(self, texture_id: TextureId):
         self.environment = texture_id
@@ -187,7 +189,11 @@ class Stage:
 
         for gltf_mesh in gltf.meshes:
 
-            material_id = self.add_material(Material.lambertian(spy.float3(0.5, 0.5, 0.5)))
+            material_id = self.add_material(Material.lambertian(
+                reflectance_r=0.5,
+                reflectance_b=0.5,
+                reflectance_g=0.5,
+            ))
 
             primitive_mesh_ids: list[MeshId] = []
             primitive_material_ids: list[MaterialId] = []

@@ -41,7 +41,7 @@ class ReplayBackpropagater:
                 spy.HitGroupDesc(hit_group_name="triangle_occlusion", any_hit_entry_point="any_hit_triangle_occlusion")
             ],
             max_recursion=2,
-            max_ray_payload_size=64,
+            max_ray_payload_size=128,
         )
 
         self.shader_table = device.create_shader_table(

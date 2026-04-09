@@ -12,7 +12,7 @@ void miss_primary(inout RayTraceResponse response)
     float2 uv = float2(phi / tau, theta / pi);
 
     response.isHit = false;
-    response.miss.radiance = scene.environment_map.Sample(scene.environment_sampler, uv).rgb;
+    response.miss.radiance = scene.textures[scene.environment_index].Sample(scene.default_sampler, uv).rgb;
 }
 
 [shader("miss")]

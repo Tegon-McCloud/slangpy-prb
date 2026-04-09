@@ -30,26 +30,27 @@ float3 sample_path(Ray ray, inout uint rand_state, out uint depth) {
         float3x3 world_to_tangent = transpose(hit.tangent_to_world);
         float3 wo = mul(world_to_tangent, -ray.direction);
 
-        float3 bsdf_value;
-        float bsdf_pdf;
-        uint error_state;
+        MaterialCallData material_call_data;
 
-        float3 wi = material_desc.sample_bsdf(
-            wo,
-            bsdf_value,
-            bsdf_pdf,
-            rand_state,
-            error_state,
-        );
+        material_call_data.wo = wo;
+        material_call_data.ior_outside = 1.0;
+        material_call_data.constants_start_index = material_desc.constants_start_index;
+        material_call_data.rand_state = rand_state;
+        material_call_data.flags = MaterialCallData.SAMPLE_FLAG;
 
-        if (all(wi == float3(0.0))) {
+        CallShader(material_desc.call_index, material_call_data);
+
+        rand_state = material_call_data.rand_state;
+        BsdfSample sample = material_call_data.sample;
+
+        if (all(sample.wi == float3(0.0))) {
             break;
         }
 
-        throughput *= bsdf_value / bsdf_pdf;
+        throughput *= sample.value / sample.pdf;
 
         ray.origin = ray.origin + hit.distance * ray.direction;
-        ray.direction = mul(hit.tangent_to_world, wi);
+        ray.direction = mul(hit.tangent_to_world, sample.wi);
     }
 
     return radiance;
@@ -73,38 +74,38 @@ void sample_path_adjoint(Ray ray, float3 radiance, float3 adjoint_radiance, inou
         float3x3 world_to_tangent = transpose(hit.tangent_to_world);
         float3 wo = mul(world_to_tangent, -ray.direction);
 
-        float3 bsdf_value;
-        float bsdf_pdf;
-        uint error_state;
+        MaterialCallData material_call_data;
 
-        float3 wi = material_desc.sample_bsdf(
-            wo,
-            bsdf_value,
-            bsdf_pdf,
-            rand_state,
-            error_state,
-        );
+        material_call_data.wo = wo;
+        material_call_data.ior_outside = 1.0;
+        material_call_data.constants_start_index = material_desc.constants_start_index;
+        material_call_data.rand_state = rand_state;
+        material_call_data.flags = MaterialCallData.SAMPLE_FLAG;
 
-        if (all(wi == float3(0.0))) {
+        CallShader(material_desc.call_index, material_call_data);
+
+        rand_state = material_call_data.rand_state;
+        BsdfSample sample = material_call_data.sample;
+
+        if (all(sample.wi == float3(0.0))) {
             break;
         }
 
         if (material_desc.requires_grad != 0) {
 
-            BsdfBackpropagation b;
+            MaterialBackpropagation b;
             b.constants_start_index = material_desc.constants_start_index;
-            b.variables_start_index = material_desc.variables_start_index;
             b.wo = wo;
-            b.wi = wi;
-            b.weight = adjoint_radiance * radiance / bsdf_value;
+            b.wi = sample.wi;
+            b.weight = adjoint_radiance * radiance / sample.value;
             
             CallShader(material_desc.backpropagate_call_index, b);
         }
 
-        throughput *= bsdf_value / bsdf_pdf;
+        throughput *= sample.value / sample.pdf;
 
         ray.origin = ray.origin + hit.distance * ray.direction;
-        ray.direction = mul(hit.tangent_to_world, wi);
+        ray.direction = mul(hit.tangent_to_world, sample.wi);
     }
 }
 

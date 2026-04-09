@@ -7,57 +7,10 @@ public struct MeshDesc {
 }
 
 public struct MaterialDesc {
-    public uint evaluate_call_index;
-    public uint sample_call_index;
+    public uint call_index;
     public uint backpropagate_call_index;
     public uint requires_grad;
     public uint constants_start_index;
-    public uint variables_start_index;
-
-    public float3 evaluate_bsdf(
-        float3 wo,
-        float3 wi,
-        inout uint rand_state,
-        
-    ) {
-        BsdfEvaluation e;
-        e.constants_start_index = this.constants_start_index;
-        e.variables_start_index = this.variables_start_index;
-        e.rand_state = rand_state;
-        e.wo = wo;
-        e.wi = wi;
-
-        CallShader(this.evaluate_call_index, e);
-
-        rand_state = e.rand_state;
-
-        return e.value;
-    }
-
-    public float3 sample_bsdf(
-        float3 wo,
-        out float3 value,
-        out float pdf,
-        inout uint rand_state,
-        out uint error_state,
-    ) {
-        BsdfSample bsdf_sample;
-        bsdf_sample.constants_start_index = this.constants_start_index;
-        bsdf_sample.variables_start_index = this.variables_start_index;
-        bsdf_sample.rand_state = rand_state;
-        bsdf_sample.error_state = 0;
-        bsdf_sample.wo = wo;
-        bsdf_sample.ior_outside = 1.0; // TODO: keep track of ior
-
-        CallShader(this.sample_call_index, bsdf_sample);
-
-        value = bsdf_sample.value;
-        pdf = bsdf_sample.pdf;
-        rand_state = bsdf_sample.rand_state;
-        error_state = bsdf_sample.error_state;
-
-        return bsdf_sample.wi;
-    }
 }
 
 public struct InstanceDesc {
@@ -104,8 +57,8 @@ public struct Scene {
     public StructuredBuffer<float> variables;
     public RWStructuredBuffer<Atomic<float>> gradient;
     
-    public SamplerState environment_sampler;
-    public Texture2D.Handle environment_map;
+    public SamplerState default_sampler;
+    public uint environment_index;
 
     public RayTraceResponse trace_ray(Ray ray, float tmin, float tmax) {
         RayDesc ray_desc;

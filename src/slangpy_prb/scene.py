@@ -5,7 +5,7 @@ from typing import Iterable
 import numpy as np
 import slangpy as spy
 
-from . import Stage, Mesh, Material, Instance
+from . import Stage, Mesh, Material, Instance, CodeBuilder, VariableId
 
 class ShaderTableBuilder:
     def __init__(
@@ -13,10 +13,10 @@ class ShaderTableBuilder:
     ):
         super().__init__()
 
-        self.modules: list[spy.Module] = []
+        self.modules: list[spy.SlangModule] = []
         self.callable_entries: list[str] = []
     
-    def add_module(self, module: spy.Module):
+    def add_module(self, module: spy.SlangModule):
         self.modules.append(module)
 
     def add_callable(self, entry_point_name: str) -> int:
@@ -46,27 +46,6 @@ class SceneVariables:
             label="variables_buffer",
         )
         
-class SceneVariablesBuilder:
-    def __init__(self):
-        super().__init__()
-
-        self.values: list[float] = []
-
-    def add_variables(self, values: Iterable[float]) -> int:
-        index = len(self.values)
-        self.values.extend(values)
-        return index
-    
-    def build(self, device: spy.Device) -> SceneVariables:
-        shape = SceneShape(len(self.values))
-        variables = SceneVariables(device, shape)
-
-        if shape.num_parameters > 0:
-            data = np.array(self.values, dtype=np.float32).view(dtype=np.uint8)
-            variables.parameter_buffer.copy_from_numpy(data)
-        
-        return variables
-
 class MeshList:
     @dataclass
     class MeshDesc:
@@ -197,22 +176,18 @@ class MeshList:
 class MaterialList:
     @dataclass
     class MaterialDesc:
-        evaluate_call_index: int
-        sample_call_index: int
+        call_index: int
         backpropagate_call_index: int
         requires_grad: int
         constants_start_index: int
-        variables_start_index: int
 
         def pack(self) -> bytes:
             return struct.pack(
-                "6I",
-                self.evaluate_call_index,
-                self.sample_call_index,
+                "4I",
+                self.call_index,
                 self.backpropagate_call_index,
                 self.requires_grad,
                 self.constants_start_index,
-                self.variables_start_index,
             )
 
     @dataclass
@@ -225,7 +200,6 @@ class MaterialList:
         device: spy.Device,
         materials: list[Material],
         shader_table_builder: ShaderTableBuilder,
-        variables_builder: SceneVariablesBuilder,
     ):
         self.device = device
         self.materials = materials
@@ -233,61 +207,62 @@ class MaterialList:
         constants: list[float] = []
         self.material_descs: list[MaterialList.MaterialDesc] = []
 
-        module_source = """
-        import util;
-        import bsdf;
-        import scene;
+        module_builder = CodeBuilder()
 
-        """
+        module_builder.append_line(f"import util;")
+        module_builder.append_line(f"import bsdf;")
+        module_builder.append_line(f"import scene;")
+        module_builder.newline()
 
         existing_shaders = set()
 
         for material in self.materials:
 
             material_constants: list[float] = []
-            material_variables: list[MaterialList.VariableDesc] = []
+            material_requires_grad = False
 
             for parameter in material.parameters:
-                if parameter.requires_grad:
-                    material_variables.append(MaterialList.VariableDesc(parameter.value, parameter.range))
-                else:
-                    material_constants.append(parameter.value)
+                match parameter.argument:
+                    case float(value):
+                        material_constants.append(value)
+                    case VariableId(id):
+                        material_requires_grad = True
 
-            constants_start_index = len(constants) 
+            constants_start_index = len(constants)
             constants.extend(material_constants)
-
-            variables_start_index = variables_builder.add_variables(v.value for v in material_variables)
-
-            material_requires_grad = len(material_variables) > 0 
 
             material_hash = abs(hash(material))
 
-            evaluate_entry_point = f"call_evaluate_{material_hash:016x}"
-            sample_entry_point = f"call_sample_{material_hash:016x}"
+            entry_point = f"call_{material_hash:016x}"
             backpropagate_entry_point = f"call_backpropagate_{material_hash:016x}"
 
             if material_hash not in existing_shaders:
-                module_source += material.evaluate_shader(evaluate_entry_point)
-                module_source += material.sample_shader(sample_entry_point)
-                module_source += material.backpropagate_shader(backpropagate_entry_point)
+                material.shader(entry_point, module_builder)
+                module_builder.newline()
+
+                material.backpropagate_shader(backpropagate_entry_point, module_builder)
+                module_builder.newline()
 
                 existing_shaders.add(material_hash)
 
-            evaluate_call_index = shader_table_builder.add_callable(evaluate_entry_point)
-            sample_call_index = shader_table_builder.add_callable(sample_entry_point)
+            call_index = shader_table_builder.add_callable(entry_point)
+
             if material_requires_grad:
                 backpropagate_call_index = shader_table_builder.add_callable(backpropagate_entry_point)
             else:
                 backpropagate_call_index = 0xffffffff
 
             self.material_descs.append(MaterialList.MaterialDesc(
-                evaluate_call_index=evaluate_call_index,
-                sample_call_index=sample_call_index,
+                call_index=call_index,
                 backpropagate_call_index=backpropagate_call_index,
                 requires_grad=1 if material_requires_grad else 0,
                 constants_start_index=constants_start_index,
-                variables_start_index=variables_start_index,
             ))
+
+        module_source = module_builder.build()
+
+        with open("output/material_module.slang", 'w') as f:
+            f.write(module_source)
 
         module_name = f"materials{abs(hash(module_source)):016x}" # hash is a workaround for incorrect caching by slangpy
         shader_table_builder.add_module(self.device.load_module_from_source(module_name, module_source))
@@ -319,16 +294,6 @@ class MaterialList:
         cursor.descs = self.material_descs_buffer
         cursor.constants = self.constants_buffer
 
-    def update_parameters(self, variable_parameters: list[float]):
-
-        for material, desc in zip(self.materials, self.material_descs):    
-            counter = 0
-
-            for parameter in material.parameters:
-                if parameter.requires_grad:
-                    parameter.value = float(variable_parameters[desc.variables_start_index + counter])
-                    counter += 1
-
 class Scene:
     @dataclass
     class InstanceDesc:
@@ -353,10 +318,9 @@ class Scene:
         self.stage = stage
         shader_table_builder.add_module(self.device.load_module("shaders/environment.slang"))
 
-        variables_builder = SceneVariablesBuilder()
-
         self.textures: list[spy.Texture] = []
         self.texture_views: list[spy.TextureView] = []
+        texture_handles = np.empty(shape=(len(stage.textures), 2), dtype=np.uint32)
 
         for i, stage_texture in enumerate(stage.textures):
             texture = device.create_texture(
@@ -373,8 +337,19 @@ class Scene:
 
             self.textures.append(texture)
             self.texture_views.append(texture_view)
-        
-        self.environment_index = int(self.stage.environment)
+
+            texture_handles[i, :] = (texture_view.descriptor_handle_ro.value, 0)
+
+        texture_handles = np.array(texture_handles, dtype=np.uint32)
+
+
+        self.texture_buffer = device.create_buffer(
+            data=texture_handles.flatten().view(np.uint8),
+            usage=spy.BufferUsage.shader_resource,
+            label="texture_buffer"
+        )
+
+        self.environment_index = self.stage.environment.index # type: ignore
 
         self.meshes = MeshList(
             self.device,
@@ -386,16 +361,20 @@ class Scene:
             self.device,
             self.stage.materials,
             shader_table_builder,
-            variables_builder,
         )
 
-        self.variables = variables_builder.build(self.device)
-        self.gradient = SceneVariables(self.device, self.variables.shape)
+        shape = SceneShape(len(stage.variables))
+        self.variables = SceneVariables(self.device, shape)
+        self.gradient = SceneVariables(self.device, shape)
+    
+        if shape.num_parameters > 0:
+            variable_values = np.array([variable.value for variable in stage.variables], dtype=np.float32)
+            self.variables.parameter_buffer.copy_from_numpy(variable_values.view(np.uint8))
         
         self.instance_descs = [
             Scene.InstanceDesc(
-                mesh_index=instance.mesh_id,
-                material_index=instance.material_id,
+                mesh_index=instance.mesh_id.index,
+                material_index=instance.material_id.index,
             ) for instance in stage.instances
         ]
         instance_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.instance_descs), dtype=np.uint8).flatten()
@@ -422,7 +401,7 @@ class Scene:
                     "instance_mask": 0xff,
                     "instance_contribution_to_hit_group_index": 0,
                     "flags": spy.AccelerationStructureInstanceFlags.none,
-                    "acceleration_structure": meshes.blases[instance.mesh_id].handle,
+                    "acceleration_structure": meshes.blases[instance.mesh_id.index].handle,
                 },
             )
 
@@ -460,7 +439,9 @@ class Scene:
         cursor.variables = self.variables.parameter_buffer
         cursor.gradient = self.gradient.parameter_buffer 
 
-        cursor.environment_map = self.texture_views[self.environment_index].descriptor_handle_ro
+        cursor.environment_index = self.environment_index
+
+        cursor.textures = self.texture_buffer
 
         self.meshes.bind(cursor.meshes)
         self.materials.bind(cursor.materials)
@@ -471,6 +452,6 @@ class Scene:
 
     def download(self):
         parameters = self.variables.parameter_buffer.to_numpy().view(np.float32)
-        parameters = [float(p) for p in parameters]
 
-        self.materials.update_parameters(parameters)
+        for parameter, variable in zip(parameters, self.stage.variables):
+            variable.value = float(parameter)

@@ -3,7 +3,7 @@ struct GradientDescent {
 
     void step<let n : int>(
         inout vector<float, n> v,
-        float g,
+        vector<float, n> g,
     ) {
         v -= learning_rate * g;
     }

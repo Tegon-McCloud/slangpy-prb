@@ -9,21 +9,31 @@ const uint sample_index;
 
 RWTexture2D<float4> render_target;
 
-float3 sample_dumb(
+BsdfSample sample_dumb(
     MaterialDesc material_desc,
     float3 wo,
-    out float3 value,
-    out float pdf,
     inout uint rand_state,
-    out uint error_state,
 ) {
-    float3 wi = sample_sphere(rand_state);
-    pdf = 1.0 / (4.0 * pi);
+    BsdfSample sample;
 
-    value = material_desc.evaluate_bsdf(wo, wi, rand_state);
-    error_state = 0;
+    sample.wi = sample_sphere(rand_state);
+    sample.pdf = 1.0 / (4.0 * pi);
 
-    return wi;
+    MaterialCallData material_call_data;
+
+    material_call_data.wo = wo;
+    material_call_data.ior_outside = 1.0;
+    material_call_data.constants_start_index = material_desc.constants_start_index;
+    material_call_data.rand_state = rand_state;
+    material_call_data.flags = MaterialCallData.EVALUATE_FLAG;
+    material_call_data.evaluation.wi = sample.wi;
+
+    CallShader(material_desc.call_index, material_call_data);
+
+    rand_state = material_call_data.rand_state;
+    sample.value = material_call_data.evaluation.value;
+
+    return sample;
 }
 
 float3 sample_path(Ray ray, inout uint rand_state) {
@@ -46,26 +56,27 @@ float3 sample_path(Ray ray, inout uint rand_state) {
         float3x3 world_to_tangent = transpose(hit.tangent_to_world);
         float3 wo = mul(world_to_tangent, -ray.direction);
 
-        float3 bsdf_value;
-        float bsdf_pdf;
-        uint error_state;
+        MaterialCallData material_call_data;
 
-        float3 wi = material_desc.sample_bsdf(
-            wo,
-            bsdf_value,
-            bsdf_pdf,
-            rand_state,
-            error_state,
-        );
+        material_call_data.wo = wo;
+        material_call_data.ior_outside = 1.0;
+        material_call_data.constants_start_index = material_desc.constants_start_index;
+        material_call_data.rand_state = rand_state;
+        material_call_data.flags = MaterialCallData.SAMPLE_FLAG;
 
-        if (all(wi == float3(0.0))) {
+        CallShader(material_desc.call_index, material_call_data);
+
+        rand_state = material_call_data.rand_state;
+        BsdfSample sample = material_call_data.sample;
+
+        if (all(sample.wi == float3(0.0))) {
             break;
         }
 
-        throughput *= bsdf_value / bsdf_pdf;
+        throughput *= sample.value / sample.pdf;
 
         ray.origin = ray.origin + hit.distance * ray.direction;
-        ray.direction = mul(hit.tangent_to_world, wi);
+        ray.direction = mul(hit.tangent_to_world, sample.wi);
     }
 
     return radiance;

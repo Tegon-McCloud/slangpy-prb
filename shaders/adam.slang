@@ -10,7 +10,7 @@ struct Adam {
 
     void step<let n : int>(
         inout vector<float, n> v,
-        float g,
+        vector<float, n> g,
         inout vector<float, n> m1,
         inout vector<float, n> m2,
     ) {
