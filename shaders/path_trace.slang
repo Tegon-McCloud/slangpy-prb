@@ -59,6 +59,7 @@ float3 sample_path(Ray ray, inout uint rand_state) {
         MaterialCallData material_call_data;
 
         material_call_data.wo = wo;
+        material_call_data.uv = hit.uv;
         material_call_data.ior_outside = 1.0;
         material_call_data.constants_start_index = material_desc.constants_start_index;
         material_call_data.rand_state = rand_state;

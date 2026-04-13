@@ -35,6 +35,7 @@ public struct PerspectiveCamera {
 public struct Meshes {
     public StructuredBuffer<float3> positions;
     public StructuredBuffer<float3> normals;
+    public StructuredBuffer<float2> uvs;
     public StructuredBuffer<uint> indices;
     public StructuredBuffer<MeshDesc> descs;
 }

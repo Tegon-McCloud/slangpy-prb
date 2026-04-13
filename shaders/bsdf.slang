@@ -23,6 +23,7 @@ public struct BsdfEvaluation
 public struct MaterialBackpropagation
 {
     public uint32_t constants_start_index;
+    public float2 uv;
     public float3 wo;
     public float3 wi;
     public float3 weight;
@@ -32,11 +33,12 @@ public struct MaterialCallData {
     public static const uint EVALUATE_FLAG = 1 << 0;
     public static const uint SAMPLE_FLAG = 1 << 1;
 
-    public float3 wo;
-    public float ior_outside;
     public uint32_t constants_start_index;
     public uint32_t rand_state;
     public uint32_t flags;
+    public float2 uv;
+    public float3 wo;
+    public float ior_outside;
 
     public BsdfEvaluation evaluation;
     public BsdfSample sample;

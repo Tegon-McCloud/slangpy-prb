@@ -3,7 +3,12 @@ from dataclasses import dataclass
 
 from . import CodeBuilder, VariableId, TextureId
 
-Argument: TypeAlias = float | VariableId | TextureId
+@dataclass(frozen=True)
+class TextureChannel:
+    id: TextureId
+    channel: int
+
+Argument: TypeAlias = float | VariableId | TextureChannel
 NonTextureArgument: TypeAlias = float | VariableId
 
 @dataclass(unsafe_hash=True)
@@ -17,13 +22,26 @@ class Material:
     evaluate_fn_name: str
     sample_fn_name: str
     
+    def referenced_textures(self) -> list[TextureId]:
+        referenced_textures: set[TextureId] = set()
+
+        for parameter in self.parameters:
+            match parameter.argument:
+                case TextureChannel(id, channel):
+                    referenced_textures.add(id)
+
+        return list(referenced_textures)
+
     def shader(self, entry_point: str, builder: CodeBuilder):
         builder.append_line(f"[shader(\"callable\")]")
         builder.append_line(f"void {entry_point}(inout MaterialCallData data)")
         builder.begin_block()
 
+        for id in self.referenced_textures():
+
+            builder.declare("float4", f"texture{id.index}", f"load_from_uv(scene.textures[{id.index}], data.uv)")
+
         constant_counter = 0
-        variable_counter = 0
 
         for parameter in self.parameters:
             match parameter.argument:
@@ -32,9 +50,8 @@ class Material:
                     constant_counter += 1
                 case VariableId(index):
                     expr = f"scene.variables[{index}]"
-                    variable_counter += 1
-                case TextureId(index):
-                    expr = f"scene.textures[{index}].Sample()"
+                case TextureChannel(id, channel):
+                    expr = f"texture{id.index}[{channel}]"
                 case _:
                     raise RuntimeError("Unknown argument type")
 
@@ -77,6 +94,9 @@ class Material:
         builder.append_line(f"void {entry_point}(inout MaterialBackpropagation data)")
         builder.begin_block()
 
+        for id in self.referenced_textures():
+            builder.declare("float4", f"texture{id.index}", f"scene.textures[{id.index}].Sample(scene.default_sampler, data.uv)")
+
         constant_counter = 0
 
         for parameter in self.parameters:
@@ -86,8 +106,8 @@ class Material:
                     constant_counter += 1
                 case VariableId(index):
                     expr = f"scene.variables[{index}]"
-                case TextureId(index):
-                    expr = f"scene.textures[{index}].Sample"
+                case TextureChannel(id, channel):
+                    expr = f"texture{id.index}[{channel}]"
                 case _:
                     raise RuntimeError("Unknown argument type")
 
@@ -121,102 +141,110 @@ class Material:
         builder.end_block()
 
     @staticmethod
+    def _standardize_float3_argument(argument: tuple[Argument, Argument, Argument] | TextureId) -> tuple[Argument, Argument, Argument]:
+
+        match argument:
+            case TextureId():
+                return (
+                    TextureChannel(argument, 0),
+                    TextureChannel(argument, 1),
+                    TextureChannel(argument, 2),    
+                )
+        
+        return argument
+
+    @staticmethod
     def lambertian(
-        reflectance_r: Argument,
-        reflectance_g: Argument,
-        reflectance_b: Argument,
+        reflectance: tuple[Argument, Argument, Argument] | TextureId,
     ) -> 'Material':
         
+        reflectance = Material._standardize_float3_argument(reflectance)
+
         return Material(
             parameters=(
-                MaterialParameter("reflectance_r", reflectance_r),
-                MaterialParameter("reflectance_g", reflectance_g),
-                MaterialParameter("reflectance_b", reflectance_b),
+                MaterialParameter("reflectance_r", reflectance[0]),
+                MaterialParameter("reflectance_g", reflectance[1]),
+                MaterialParameter("reflectance_b", reflectance[2]),
             ),
             evaluate_fn_name="evaluate_lambertian",
             sample_fn_name="sample_lambertian",
         )
 
-    # @staticmethod
-    # def microfacet_conductor_ss(
-    #     ior: spy.float3,
-    #     extinction: spy.float3,
-    #     roughness: float,
-    #     requires_grad: bool = False,
-    # ) -> 'Material':
-    #     return Material(
-    #         parameters=(
-    #             MaterialParameter("ior_r", ior.x, requires_grad, (0.0, math.inf)),
-    #             MaterialParameter("ior_g", ior.y, requires_grad, (0.0, math.inf)),
-    #             MaterialParameter("ior_b", ior.z, requires_grad, (0.0, math.inf)),
-    #             MaterialParameter("extinction_r", extinction.x, requires_grad, (0.0, math.inf)),
-    #             MaterialParameter("extinction_g", extinction.y, requires_grad, (0.0, math.inf)),
-    #             MaterialParameter("extinction_b", extinction.z, requires_grad, (0.0, math.inf)),
-    #             MaterialParameter("roughness", roughness, requires_grad, (0.0, 1.0)),
-    #         ),
-    #         evaluate_fn_name="evaluate_microfacet_conductor_ss",
-    #         sample_fn_name="sample_microfacet_conductor_ss",
-    #     )
+    @staticmethod
+    def microfacet_conductor_ss(
+        ior: tuple[Argument, Argument, Argument] | TextureId,
+        extinction: tuple[Argument, Argument, Argument] | TextureId,
+        roughness: Argument,
+    ) -> 'Material':
+        
+        ior = Material._standardize_float3_argument(ior)
+        extinction = Material._standardize_float3_argument(extinction)
 
-    # @staticmethod
-    # def microfacet_dielectric_ss(
-    #     ior: float | tuple[float, bool],
-    #     roughness: float | tuple[float, bool],
-    # ) -> 'Material':
-    #     ior, ior_requires_grad = Material._standardize_parameter(ior)
-    #     roughness, roughness_requires_grad = Material._standardize_parameter(roughness)
+        return Material(
+            parameters=(
+                MaterialParameter("ior_r", ior[0]),
+                MaterialParameter("ior_g", ior[1]),
+                MaterialParameter("ior_b", ior[2]),
+                MaterialParameter("extinction_r", extinction[0]),
+                MaterialParameter("extinction_g", extinction[1]),
+                MaterialParameter("extinction_b", extinction[2]),
+                MaterialParameter("roughness", roughness),
+            ),
+            evaluate_fn_name="evaluate_microfacet_conductor_ss",
+            sample_fn_name="sample_microfacet_conductor_ss",
+        )
 
-    #     return Material(
-    #         parameters=(
-    #             MaterialParameter("ior", ior, ior_requires_grad, (0.0, math.inf)),
-    #             MaterialParameter("roughness", roughness, roughness_requires_grad, (0.0, 1.0)),
-    #         ),
-    #         evaluate_fn_name="evaluate_microfacet_dielectric_ss",
-    #         sample_fn_name="sample_microfacet_dielectric_ss",
-    #     )
+    @staticmethod
+    def microfacet_dielectric_ss(
+        ior: NonTextureArgument,
+        roughness: Argument,
+    ) -> 'Material':
+        return Material(
+            parameters=(
+                MaterialParameter("ior", ior),
+                MaterialParameter("roughness", roughness),
+            ),
+            evaluate_fn_name="evaluate_microfacet_dielectric_ss",
+            sample_fn_name="sample_microfacet_dielectric_ss",
+        )
 
-# class Metals:
-#     @staticmethod
-#     def copper(roughness: float, requires_grad: bool = False) -> Material:
-#         return Material.microfacet_conductor_ss(
-#             ior=spy.float3(0.27527, 1.0066, 1.2444),
-#             extinction=spy.float3(3.3726, 2.5823, 2.4352),
-#             roughness=roughness,
-#             requires_grad=requires_grad,
-#         )
+class Metals:
+    @staticmethod
+    def copper(roughness: Argument) -> Material:
+        return Material.microfacet_conductor_ss(
+            ior=(0.27527, 1.0066, 1.2444),
+            extinction=(3.3726, 2.5823, 2.4352),
+            roughness=roughness,
+        )
 
-#     @staticmethod
-#     def gold(roughness: float, requires_grad: bool = False) -> Material:
-#         return Material.microfacet_conductor_ss(
-#             ior=spy.float3(0.18836, 0.42415, 1.3489),
-#             extinction=spy.float3(3.4034, 2.4721, 1.8851),
-#             roughness=roughness,
-#             requires_grad=requires_grad,
-#         )
+    @staticmethod
+    def gold(roughness: Argument) -> Material:
+        return Material.microfacet_conductor_ss(
+            ior=(0.18836, 0.42415, 1.3489),
+            extinction=(3.4034, 2.4721, 1.8851),
+            roughness=roughness,
+        )
 
-#     @staticmethod
-#     def silver(roughness: float, requires_grad: bool = False) -> Material:
-#         return Material.microfacet_conductor_ss(
-#             ior=spy.float3(0.056909, 0.0595825, 0.044439),
-#             extinction=spy.float3(4.2543, 3.5974, 2.7511),
-#             roughness=roughness,
-#             requires_grad=requires_grad,
-#         )
+    @staticmethod
+    def silver(roughness: Argument) -> Material:
+        return Material.microfacet_conductor_ss(
+            ior=(0.056909, 0.0595825, 0.044439),
+            extinction=(4.2543, 3.5974, 2.7511),
+            roughness=roughness,
+        )
 
-#     @staticmethod 
-#     def aluminium(roughness: float, requires_grad: bool = False) -> Material:
-#         return Material.microfacet_conductor_ss(
-#             ior=spy.float3(1.4303, 1.0152, 0.66843),
-#             extinction=spy.float3(7.5081, 6.6273, 5.5748),
-#             roughness=roughness,
-#             requires_grad=requires_grad,
-#         )
+    @staticmethod 
+    def aluminium(roughness: Argument) -> Material:
+        return Material.microfacet_conductor_ss(
+            ior=(1.4303, 1.0152, 0.66843),
+            extinction=(7.5081, 6.6273, 5.5748),
+            roughness=roughness,
+        )
 
-#     @staticmethod 
-#     def cobalt(roughness: float, requires_grad: bool = False) -> Material:
-#         return Material.microfacet_conductor_ss(
-#             ior=spy.float3(1.7715, 2.0524, 1.7715),
-#             extinction=spy.float3(3.3385, 3.8242, 3.3385),
-#             roughness=roughness,
-#             requires_grad=requires_grad,
-#         )
+    @staticmethod 
+    def cobalt(roughness: Argument) -> Material:
+        return Material.microfacet_conductor_ss(
+            ior=(1.7715, 2.0524, 1.7715),
+            extinction=(3.3385, 3.8242, 3.3385),
+            roughness=roughness,
+        )

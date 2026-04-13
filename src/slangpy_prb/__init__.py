@@ -3,7 +3,7 @@ from .transform import Transform
 from .stage_ids import VariableId, TextureId, MeshId, MaterialId, InstanceId
 from .mesh import Mesh
 from .texture import Texture
-from .material import MaterialParameter, Material
+from .material import MaterialParameter, TextureChannel, Material
 from .camera import PerspectiveCamera
 from .stage import Variable, Instance, Stage
 from .scene import ShaderTableBuilder, Scene, SceneShape, SceneVariables

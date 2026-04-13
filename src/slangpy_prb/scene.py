@@ -87,6 +87,7 @@ class MeshList:
         
         positions = np.concatenate([mesh.positions for mesh in meshes], axis=0)
         normals = np.concatenate([mesh.normals for mesh in meshes], axis=0)
+        uvs = np.concatenate([mesh.uvs for mesh in meshes], axis=0)
         indices = np.concatenate([mesh.indices for mesh in meshes], axis=0)
 
         mesh_descs_bytes = np.frombuffer(b"".join(desc.pack() for desc in self.mesh_descs), dtype=np.uint8).flatten()
@@ -100,6 +101,11 @@ class MeshList:
             usage=spy.BufferUsage.shader_resource,
             label="normal_buffer",
             data=normals,
+        )
+        self.uv_buffer = self.device.create_buffer(
+            usage=spy.BufferUsage.shader_resource,
+            label="uv_buffer",
+            data=uvs,
         )
         self.index_buffer = self.device.create_buffer(
             usage=spy.BufferUsage.shader_resource,
@@ -170,6 +176,7 @@ class MeshList:
     ):
         cursor.positions = self.position_buffer
         cursor.normals = self.normal_buffer
+        cursor.uvs = self.uv_buffer
         cursor.indices = self.index_buffer
         cursor.descs = self.mesh_desc_buffer
 
@@ -341,7 +348,6 @@ class Scene:
             texture_handles[i, :] = (texture_view.descriptor_handle_ro.value, 0)
 
         texture_handles = np.array(texture_handles, dtype=np.uint32)
-
 
         self.texture_buffer = device.create_buffer(
             data=texture_handles.flatten().view(np.uint8),

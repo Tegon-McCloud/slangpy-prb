@@ -16,6 +16,7 @@ public struct Ray {
 
 public struct HitDesc {
     public float distance;
+    public float2 uv;
     public float3x3 tangent_to_world;
     public uint material_index;
 }
@@ -52,4 +53,18 @@ public float3x3 make_tbn_matrix(float3 normal) {
         float3(signbit * b, signbit * (1.0f + normal.y * normal.y * a), -normal.y),
         normal,
     ));
+}
+
+public int2 uv_to_texel(Texture2D.Handle texture, float2 uv) {
+    uint2 size;
+    texture.GetDimensions(size.x, size.y);
+    int2 pos = int2(float2(size) * uv);
+    pos = clamp(pos, int2(0), size);
+
+    return pos;
+}
+
+public float4 load_from_uv(Texture2D.Handle texture, float2 uv) {
+    int2 texel = uv_to_texel(texture, uv);
+    return texture.Load(int3(texel, 0));
 }

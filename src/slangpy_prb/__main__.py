@@ -280,7 +280,26 @@ def main():
 
     stage = Stage()
 
-    stage.load_gltf("./assets/XYZRGBDragon.glb")
+
+    texture_arr = np.zeros(shape=(256, 256, 3), dtype=np.float32)
+
+    for i in range(256):
+        for j in range(256):
+            texture_arr[i,j,:] = [i/256, j/256, 0.0]
+
+    transform = Transform.identity()
+    transform.rotate_x(-np.pi/2.0)
+
+    stage.add_instance(Instance(
+        mesh_id=stage.add_mesh(Mesh.sphere_uv(n=64)),
+        material_id=stage.add_material(Material.lambertian(
+            reflectance=stage.add_texture(Texture(texture_arr)),
+        )),
+        transform=transform,
+    ))
+    stage.camera = PerspectiveCamera(Transform.from_xyz(0.0, 0.0, 5.0), aspect_ratio=width / height)
+
+    # stage.load_gltf("./assets/XYZRGBDragon.glb")
     # stage.load_gltf("./assets/Lantern.glb")
 
     environment_image = iio.imread("assets/kloppenheim_06_puresky_4k.hdr")
@@ -289,11 +308,11 @@ def main():
 
     # plot_loss(device, width, height, stage)
 
-    stage.replace_material(MaterialId(0), Material.lambertian(
-        reflectance_r=0.8,
-        reflectance_g=0.2,
-        reflectance_b=0.2,
-    ))
+    # stage.replace_material(MaterialId(0), Material.lambertian(
+    #     reflectance_r=0.8,
+    #     reflectance_g=0.2,
+    #     reflectance_b=0.2,
+    # ))
     # stage.replace_material(MaterialId(0), Metals.gold(roughness=0.4))
     # stage.replace_material(MaterialId(0), Material.microfacet_dielectric_ss(ior=1.5, roughness=0.4))
 
@@ -310,6 +329,8 @@ def main():
     )
 
     save_img(tonemap(device, reference).to_numpy(), "./output/reference.png")
+
+    return
 
     stage.replace_material(MaterialId(0), Material.lambertian(
         stage.add_variable(Variable(0.5, range=(0.0, 1.0))),

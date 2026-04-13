@@ -75,8 +75,6 @@ class Stage:
         self.instances.append(instance)
         return instance_id
 
-
-
     def set_environment(self, texture_id: TextureId):
         self.environment = texture_id
     
@@ -190,9 +188,7 @@ class Stage:
         for gltf_mesh in gltf.meshes:
 
             material_id = self.add_material(Material.lambertian(
-                reflectance_r=0.5,
-                reflectance_b=0.5,
-                reflectance_g=0.5,
+                reflectance=(0.5, 0.5, 0.5),
             ))
 
             primitive_mesh_ids: list[MeshId] = []
@@ -202,6 +198,11 @@ class Stage:
                 positions = self._read_gltf_accessor(gltf, buffer_data, cast(int, primitive.attributes.POSITION))
                 normals = self._read_gltf_accessor(gltf, buffer_data, cast(int, primitive.attributes.NORMAL))
 
+                if primitive.attributes.TEXCOORD_0 != None:
+                    uvs = self._read_gltf_accessor(gltf, buffer_data, cast(int, primitive.attributes.TEXCOORD_0))
+                else:
+                    uvs = np.zeros(shape=(positions.shape[0], 2), dtype=np.float32)
+
                 if primitive.indices == None:
                     raise RuntimeError("Not implemented")
 
@@ -209,7 +210,7 @@ class Stage:
                 indices = indices.astype(np.uint32)
                 indices = indices.reshape((-1, 3))
 
-                mesh_id = self.add_mesh(Mesh(positions, normals, indices))
+                mesh_id = self.add_mesh(Mesh(positions, normals, uvs, indices))
 
                 primitive_mesh_ids.append(mesh_id)
                 primitive_material_ids.append(material_id)

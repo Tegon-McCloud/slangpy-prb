@@ -6,11 +6,13 @@ class Mesh:
         self,
         positions: npt.NDArray[np.float32],
         normals: npt.NDArray[np.float32],
+        uvs: npt.NDArray[np.float32],
         indices: npt.NDArray[np.uint32],
     ):
         super().__init__()
         self.positions = positions
         self.normals = normals
+        self.uvs = uvs
         self.indices = indices
 
     @property
@@ -41,26 +43,41 @@ class Mesh:
             [0.0, 0.0, 1.0],
         ], dtype=np.float32)
 
+        uvs = np.array([
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+        ])
+
         indices = np.array([
             [0, 1, 2],
             [3, 2, 1],
         ], dtype=np.uint32)
 
-        return Mesh(positions=vertices, normals=normals, indices=indices)
+        return Mesh(positions=vertices, normals=normals, uvs=uvs, indices=indices)
 
+    @staticmethod
     def sphere_uv(n: int = 8) -> 'Mesh':
         
         m = 2 * n
         positions = np.empty(shape=(m*(n+1), 3), dtype=np.float32)
 
-        phi = np.linspace(0, 2.0 * np.pi, m, endpoint=False, dtype=np.float32)[np.newaxis,:]
-        theta = np.linspace(0, np.pi, n + 1, dtype=np.float32)[:,np.newaxis]
+        u = np.linspace(0.0, 1.0, m, endpoint=False, dtype=np.float32)[np.newaxis,:]
+        v = np.linspace(0.0, 1.0, n + 1, dtype=np.float32)[:,np.newaxis]
+
+        phi = 2.0 * np.pi * u
+        theta = np.pi * v
 
         positions[:,0] = (np.cos(phi) * np.sin(theta)).flatten()
         positions[:,1] = (np.sin(phi) * np.sin(theta)).flatten()
         positions[:,2] = np.broadcast_to(np.cos(theta), shape=np.broadcast_shapes(phi.shape, theta.shape)).flatten()
 
         normals = np.copy(positions)
+        uvs = np.empty(shape=(m*(n+1), 2), dtype=np.float32)
+
+        uvs[:,0] = np.broadcast_to(u, shape=np.broadcast_shapes(u.shape, v.shape)).flatten()
+        uvs[:,1] = np.broadcast_to(v, shape=np.broadcast_shapes(u.shape, v.shape)).flatten()
 
         i = np.repeat(np.arange(0, n, dtype=np.uint32), m)
         j = np.tile(np.arange(0, m, dtype=np.uint32), n)
@@ -77,7 +94,7 @@ class Mesh:
         indices[1::2,1] = linearize(i + 1, j)
         indices[1::2,2] = linearize(i + 1, j + 1)
 
-        return Mesh(positions=positions, normals=normals, indices=indices)
+        return Mesh(positions=positions, normals=normals, uvs=uvs, indices=indices)
 
 
 
