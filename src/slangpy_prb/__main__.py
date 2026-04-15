@@ -107,9 +107,10 @@ def optimize(
         device.submit_command_buffer(command_encoder.finish())
         
         if iteration % 5 == 0:
-            values = scene.variables.parameter_buffer.to_numpy().view(np.float32)
-            tqdm.write(f"parameters: {values}")
             save_img(tonemap(primal.device, primal).to_numpy(), f"./output/primal_{iteration:02}.png")
+            if scene.variables.shape.num_parameters > 0:
+                values = scene.variables.parameter_buffer.to_numpy().view(np.float32)
+                tqdm.write(f"parameters: {values}")
 
     with open("output/loss_over_iteration.npy", "wb") as f:
         np.save(f, losses)
@@ -264,6 +265,87 @@ def bsdf_scatter(device: spy.Device):
 
     fig.savefig("output/bsdf_samples.pdf")
 
+def add_xyzrgb_dragon_scene(stage: Stage, width: int, height: int):
+    stage.load_gltf("./assets/XYZRGBDragon.glb")
+
+    environment_image = iio.imread("assets/kloppenheim_06_puresky_4k.hdr")
+    stage.environment = stage.add_texture(Texture(environment_image))
+
+def add_lantern_scene(stage: Stage, width: int, height: int):
+    stage.load_gltf("./assets/Lantern.glb")
+
+    environment_image = iio.imread("assets/kloppenheim_06_puresky_4k.hdr")
+    stage.environment = stage.add_texture(Texture(environment_image))
+
+def add_textured_sphere_scene(stage: Stage, width: int, height: int):
+    texture_arr = np.zeros(shape=(256, 256, 3), dtype=np.float32)
+
+    for i in range(8):
+        for j in range(8):
+            texture_arr[32*i:32*(i+1),32*j:32*(j+1),:] = [0.5, 0.5, 0.5] if (i + j) % 2 == 0 else [1.0, 1.0, 1.0]
+
+    transform = Transform.identity()
+    transform.rotate_x(-np.pi/2.0)
+
+    stage.add_instance(Instance(
+        mesh_id=stage.add_mesh(Mesh.sphere_uv(n=64)),
+        material_id=stage.add_material(Material.lambertian(
+            reflectance=stage.add_texture(Texture(texture_arr)),
+        )),
+        transform=transform,
+    ))
+    stage.camera = PerspectiveCamera(Transform.from_xyz(0.0, 0.0, 5.0), aspect_ratio=width / height)
+
+    environment_image = np.zeros((1, 1, 3), dtype=np.float32)
+    stage.environment = stage.add_texture(Texture(environment_image))
+
+    stage.point_light = PointLight(
+        position=spy.float3(1.0, 1.0, 1.0),
+        intensity=spy.float3(1.0),
+    )
+
+
+def add_hco_bust_scene(stage: Stage, width: int, height: int):
+    bust_id = stage.load_obj("./assets/PhotoRender_data/hc_orsted.obj")
+    ground_id = stage.load_obj("./assets/PhotoRender_data/hco_ground.obj")
+
+    stage.replace_material(
+        stage.get_instance(bust_id).material_id,
+        Metals.aluminium(roughness=stage.add_variable(Variable(0.5, range=(0.0, 1.0))))
+    )
+
+    stage.get_instance(ground_id).transform.rotate_x(np.pi / 2.0)
+
+    camera_position = spy.float3(0.28255452843554596, -1.4590566335764603, 0.15820198110093153)
+    camera_rotation = spy.float3x3([
+        0.9999265930643305, 0.0019213613603717853, 0.011963145626623345,
+        0.012015137318730981, -0.029819251871890606, -0.9994830907489195,
+        -0.001563636138289551, 0.999553460595442, -0.02984014835257065,
+    ])
+    camera_inv_matrix = spy.float3x3([
+        9.179619514177686e-05, 0.0, -0.2318790936563762,
+        0.0, 9.15419203472016e-05, -0.18786894023818881,
+        0.0, 0.0, 1.0
+    ])
+    camera_matrix = spy.math.inverse(camera_inv_matrix)
+
+    stage.camera = PerspectiveCamera(
+        transform=Transform(
+            translation=camera_position,
+            rotation=spy.math.quat_from_matrix(camera_rotation),
+            scale=spy.float3(1.0),
+        ),
+        vfov=0.5,
+        aspect_ratio=width/height
+    )
+
+    environment_image = np.full(shape=(1, 1, 3), fill_value=0.001137, dtype=np.float32)
+    stage.environment = stage.add_texture(Texture(environment_image))
+
+    stage.point_light = PointLight(
+        position=spy.float3(-0.15290257842979774, 0.0010295320183712445, 0.827301670159169),
+        intensity=spy.float3(0.28),    
+    )
 
 def main():
     device = spy.create_device(
@@ -280,34 +362,13 @@ def main():
 
     stage = Stage()
 
-
-    texture_arr = np.zeros(shape=(256, 256, 3), dtype=np.float32)
-
-    for i in range(256):
-        for j in range(256):
-            texture_arr[i,j,:] = [i/256, j/256, 0.0]
-
-    transform = Transform.identity()
-    transform.rotate_x(-np.pi/2.0)
-
-    stage.add_instance(Instance(
-        mesh_id=stage.add_mesh(Mesh.sphere_uv(n=64)),
-        material_id=stage.add_material(Material.lambertian(
-            reflectance=stage.add_texture(Texture(texture_arr)),
-        )),
-        transform=transform,
-    ))
-    stage.camera = PerspectiveCamera(Transform.from_xyz(0.0, 0.0, 5.0), aspect_ratio=width / height)
-
-    # stage.load_gltf("./assets/XYZRGBDragon.glb")
-    # stage.load_gltf("./assets/Lantern.glb")
-
-    environment_image = iio.imread("assets/kloppenheim_06_puresky_4k.hdr")
-    environment_id = stage.add_texture(Texture(environment_image))
-    stage.set_environment(environment_id)
+    # add_xyzrgb_dragon_scene(stage, width, height)
+    # add_lantern_scene(stage, width, height)
+    # add_textured_sphere_scene(stage, width, height)
+    add_hco_bust_scene(stage, width, height)
 
     # plot_loss(device, width, height, stage)
-
+    
     # stage.replace_material(MaterialId(0), Material.lambertian(
     #     reflectance_r=0.8,
     #     reflectance_g=0.2,
@@ -332,11 +393,15 @@ def main():
 
     return
 
-    stage.replace_material(MaterialId(0), Material.lambertian(
-        stage.add_variable(Variable(0.5, range=(0.0, 1.0))),
-        stage.add_variable(Variable(0.5, range=(0.0, 1.0))),
-        stage.add_variable(Variable(0.5, range=(0.0, 1.0))),
-    ))
+    # texture_arr = np.zeros(shape=(256, 256, 3), dtype=np.float32)
+    # texture_arr[:,:,:] = [0.5, 0.5, 0.5]
+    # stage.replace_texture(TextureId(0), Texture(texture_arr))
+
+    # stage.replace_material(MaterialId(0), Material.lambertian(
+    #     stage.add_variable(Variable(0.5, range=(0.0, 1.0))),
+    #     stage.add_variable(Variable(0.5, range=(0.0, 1.0))),
+    #     stage.add_variable(Variable(0.5, range=(0.0, 1.0))),
+    # ))
     # stage.replace_material(MaterialId(0), Metals.copper(roughness=0.8, requires_grad=True))
     # stage.replace_material(0, Material.microfacet_dielectric_ss(ior=1.5, roughness=(0.5, True)))
 

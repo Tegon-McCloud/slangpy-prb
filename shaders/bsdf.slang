@@ -2,8 +2,8 @@ module bsdf;
 __include bsdf.lambertian;
 // __include bsdf.specular_conductor;
 // __include bsdf.specular_dielectric;
-// __include bsdf.microfacet_conductor;
-// __include bsdf.microfacet_dielectric;
+__include bsdf.microfacet_conductor;
+__include bsdf.microfacet_dielectric;
 
 import util;
 

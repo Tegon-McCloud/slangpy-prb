@@ -5,7 +5,7 @@ from typing import Iterable
 import numpy as np
 import slangpy as spy
 
-from . import Stage, Mesh, Material, Instance, CodeBuilder, VariableId
+from . import Stage, Mesh, Material, Instance, PointLight, CodeBuilder, TextureId, VariableId
 
 class ShaderTableBuilder:
     def __init__(
@@ -301,6 +301,21 @@ class MaterialList:
         cursor.descs = self.material_descs_buffer
         cursor.constants = self.constants_buffer
 
+class LightList:
+    def __init__(
+        self,
+        device: spy.Device,
+        environment: TextureId,
+        point_light: PointLight
+    ):
+        self.environment_index = environment.index
+        self.point_light = point_light
+
+    def bind(self, cursor: spy.ShaderCursor):
+        cursor.environment_texture_index = self.environment_index
+        cursor.point_light.position = self.point_light.position
+        cursor.point_light.intensity = self.point_light.intensity
+
 class Scene:
     @dataclass
     class InstanceDesc:
@@ -355,8 +370,6 @@ class Scene:
             label="texture_buffer"
         )
 
-        self.environment_index = self.stage.environment.index # type: ignore
-
         self.meshes = MeshList(
             self.device,
             self.stage.meshes,
@@ -367,6 +380,12 @@ class Scene:
             self.device,
             self.stage.materials,
             shader_table_builder,
+        )
+
+        self.lights = LightList(
+            self.device,
+            stage.environment, # type: ignore
+            stage.point_light,
         )
 
         shape = SceneShape(len(stage.variables))
@@ -445,12 +464,11 @@ class Scene:
         cursor.variables = self.variables.parameter_buffer
         cursor.gradient = self.gradient.parameter_buffer 
 
-        cursor.environment_index = self.environment_index
-
         cursor.textures = self.texture_buffer
 
         self.meshes.bind(cursor.meshes)
         self.materials.bind(cursor.materials)
+        self.lights.bind(cursor.lights)
         self.camera.bind(cursor.camera)
 
     def zero_grad(self, command_encoder: spy.CommandEncoder):

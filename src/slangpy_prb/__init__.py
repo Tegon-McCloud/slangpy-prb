@@ -3,9 +3,9 @@ from .transform import Transform
 from .stage_ids import VariableId, TextureId, MeshId, MaterialId, InstanceId
 from .mesh import Mesh
 from .texture import Texture
-from .material import MaterialParameter, TextureChannel, Material
+from .material import MaterialParameter, TextureChannel, Material, Metals
 from .camera import PerspectiveCamera
-from .stage import Variable, Instance, Stage
+from .stage import Variable, Instance, PointLight, Stage
 from .scene import ShaderTableBuilder, Scene, SceneShape, SceneVariables
 from .pathtracer import PathTracer
 from .replay_backpropagater import ReplayBackpropagater

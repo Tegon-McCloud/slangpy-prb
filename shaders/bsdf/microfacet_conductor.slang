@@ -40,10 +40,8 @@ public float3 evaluate_microfacet_conductor_ss(
     return reflectance * ndf_ggx(wm, alpha) * masking_shadowing_ggx(wo, wi, alpha) / (4.0 * abs(wo.z));
 }
 
-public float3 sample_microfacet_conductor_ss(
+public BsdfSample sample_microfacet_conductor_ss(
     float3 wo,
-    out float3 wi,
-    out float pdf,
     inout uint rand_state,
     float ior_r,
     float ior_g,
@@ -62,7 +60,8 @@ public float3 sample_microfacet_conductor_ss(
     float3 wm = sample_vndf_ggx(wo, alpha, rand_state);
     float cos_theta_om = dot(wo, wm);
 
-    wi = 2.0 * cos_theta_om * wm - wo;
+
+    float3 wi = 2.0 * cos_theta_om * wm - wo;
 
     float3 reflectance;
     for (int i = 0; i < 3; i++) {
@@ -72,6 +71,10 @@ public float3 sample_microfacet_conductor_ss(
         reflectance[i] = reflectance_fresnel_complex(cos_theta_om, ior);
     }
 
-    pdf = vndf_ggx(wo, wm, alpha)  / (4.0 * cos_theta_om);
-    return reflectance * ndf_ggx(wm, alpha) * masking_shadowing_ggx(wo, wi, alpha) / (4.0 * abs(wo.z));
+    BsdfSample sample;
+    sample.wi = wi;
+    sample.pdf = vndf_ggx(wo, wm, alpha)  / (4.0 * cos_theta_om);
+    sample.value = reflectance * ndf_ggx(wm, alpha) * masking_shadowing_ggx(wo, wi, alpha) / (4.0 * abs(wo.z));
+
+    return sample;
 }

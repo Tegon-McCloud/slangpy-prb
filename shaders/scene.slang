@@ -45,22 +45,39 @@ public struct Materials {
     public StructuredBuffer<MaterialDesc> descs;
 }
 
+public struct PointLight {
+    public float3 position;
+    public float3 intensity;   
+}
+
+public struct Lights {
+    public PointLight point_light;
+    public uint environment_texture_index;
+}
+
+public struct LightSample {
+    public float3 wi_world;
+    public float distance;
+    public float3 radiance;
+    public float pdf;
+}
+
 public struct Scene {
     public RaytracingAccelerationStructure tlas;
     
     public PerspectiveCamera camera;
     public Meshes meshes;
-    public StructuredBuffer<Texture2D.Handle> textures; 
+    public StructuredBuffer<Texture2D.Handle> textures;
     public Materials materials;
-    
+    public Lights lights;    
+
     public StructuredBuffer<InstanceDesc> instance_descs;
     
     public StructuredBuffer<float> variables;
     public RWStructuredBuffer<Atomic<float>> gradient;
     
     public SamplerState default_sampler;
-    public uint environment_index;
-
+    
     public RayTraceResponse trace_ray(Ray ray, float tmin, float tmax) {
         RayDesc ray_desc;
 
@@ -84,6 +101,47 @@ public struct Scene {
 
         return response;
     }
+
+    public bool trace_occlusion_ray(Ray ray, float tmin, float tmax) {
+
+        RayDesc ray_desc;
+
+        ray_desc.Origin = ray.origin;
+        ray_desc.Direction = ray.direction;
+        ray_desc.TMin = tmin;
+        ray_desc.TMax = tmax;
+
+        bool occluded = false;
+
+        TraceRay(
+            tlas,
+            0,
+            0xff,
+            1, /* RayContributionToHitGroupIndex */
+            0, /* MultiplierForGeometryContributionHitGroupIndex */
+            1, /* MissShaderIndex */
+            ray_desc,
+            occluded,
+        );
+
+        return occluded;
+    }
+
+
+    public LightSample sample_light(float3 position, inout uint rand_state) {
+
+        float3 diff = lights.point_light.position - position;
+        float dist_sq = dot(diff, diff);
+        float3 wi_world = normalize(diff);
+
+        return LightSample(
+            wi_world,
+            sqrt(dist_sq),
+            lights.point_light.intensity * (1.0 / dist_sq),
+            1.0,
+        );
+    }
+
 }
 
 public ParameterBlock<Scene> scene;

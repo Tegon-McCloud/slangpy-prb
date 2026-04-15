@@ -23,7 +23,12 @@ class Instance:
     mesh_id: MeshId
     material_id: MaterialId
     transform: Transform
-    
+
+@dataclass
+class PointLight: 
+    position: spy.float3
+    intensity: spy.float3
+
 @dataclass 
 class GltfMeshDescriptor:
     mesh_ids: list[MeshId]
@@ -32,6 +37,35 @@ class GltfMeshDescriptor:
 @dataclass
 class GltfTextureDescriptor:
     texture_id: TextureId
+
+@dataclass(frozen=True)
+class ObjIndex:
+    v: int
+    vt: int
+    vn: int
+
+    @staticmethod
+    def parse(part: str) -> 'ObjIndex':
+        # Possible formats:
+        # v
+        # v/vt
+        # v//vn
+        # v/vt/vn
+        vals = part.split('/')
+
+        v_idx = (int(vals[0]) - 1)
+
+        if len(vals) > 1 and vals[1]:
+            vt_idx = int(vals[1]) - 1
+        else:
+            vt_idx = -1
+
+        if len(vals) > 2 and vals[2]:
+            vn_idx = int(vals[2]) - 1
+        else:
+            vn_idx = -1
+        
+        return ObjIndex(v_idx, vt_idx, vn_idx)
 
 class Stage:
     def __init__(self):
@@ -42,7 +76,9 @@ class Stage:
         self.materials: list[Material] = []
         self.instances: list[Instance] = []
         self.camera = PerspectiveCamera()
+        self.point_light: PointLight = PointLight(spy.float3(0.0), spy.float3(0.0))
         self.environment: TextureId | None = None
+
 
     def add_variable(self, variable: Variable) -> VariableId:
         variable_id = VariableId(len(self.variables))
@@ -53,6 +89,9 @@ class Stage:
         texture_id = TextureId(len(self.textures))
         self.textures.append(texture)
         return texture_id
+
+    def replace_texture(self, texture_id: TextureId, texture: Texture):
+        self.textures[texture_id.index] = texture
 
     def add_mesh(self, mesh: Mesh) -> MeshId:
         mesh_id = MeshId(len(self.meshes))
@@ -75,8 +114,8 @@ class Stage:
         self.instances.append(instance)
         return instance_id
 
-    def set_environment(self, texture_id: TextureId):
-        self.environment = texture_id
+    def get_instance(self, instance_id: InstanceId) -> Instance:
+        return self.instances[instance_id.index]
     
     def load_gltf(self, path: str | pathlib.Path):
         gltf = GLTF2().load(path)
@@ -283,15 +322,86 @@ class Stage:
 
         return buffer_data
 
-
-
-
-
-
-
+    def load_obj(self, path: str | pathlib.Path) -> InstanceId:
+        obj_positions: list[tuple[float, float, float]] = []
+        obj_uvs: list[tuple[float, float]] = []
+        obj_normals: list[tuple[float, float, float]] = []
         
+        obj_faces: list[list[ObjIndex]] = []
 
+        import tqdm
 
+        with open(path, 'r') as f:
+            for line in tqdm.tqdm(f):
+                if not line.strip() or line.startswith('#'):
+                    continue
+
+                parts = line.strip().split()
+                prefix = parts[0]
+
+                if prefix == 'v':  # vertex position
+                    obj_positions.append((float(parts[1]), float(parts[2]), float(parts[3])))
+
+                elif prefix == 'vt':  # texture coordinate
+                    obj_uvs.append((float(parts[1]), float(parts[2])))
+
+                elif prefix == 'vn':  # normal
+                    obj_normals.append((float(parts[1]), float(parts[2]), float(parts[3])))
+
+                elif prefix == 'f':  # face
+                    obj_face: list[ObjIndex] = []
+
+                    for vert in parts[1:]:
+                        obj_face.append(ObjIndex.parse(vert))
+
+                    obj_faces.append(obj_face)
+        
+        obj_index_map: dict[ObjIndex, int] = {}
+        
+        positions: list[tuple[float, float, float]] = []
+        uvs: list[tuple[float, float]] = []
+        normals: list[tuple[float, float, float]] = []
+
+        indices: list[list[int]] = []
+
+        for obj_face in tqdm.tqdm(obj_faces):
+            face: list[int] = []
+
+            for obj_index in obj_face:
+                if obj_index not in obj_index_map:
+                    index = len(positions)
+                    obj_index_map[obj_index] = index
+
+                    positions.append(obj_positions[obj_index.v])
+
+                    if obj_index.vt != -1:
+                        uvs.append(obj_uvs[obj_index.vt])
+                    else:
+                        uvs.append((0.0, 0.0))
+                    
+                    if obj_index.vn != -1:
+                        normals.append(obj_normals[obj_index.vn])
+                    else:
+                        raise RuntimeError("Not implemented")
+
+                face.append(obj_index_map[obj_index])
+
+            while len(face) > 3:
+                indices.append([face[-1], face[0], face[-2]])
+                face = face[:-1]
+
+            indices.append(face)
+
+        mesh_id = self.add_mesh(Mesh(
+            positions=np.array(positions, dtype=np.float32),
+            normals=np.array(normals, dtype=np.float32),
+            uvs=np.array(uvs, dtype=np.float32),
+            indices=np.array(indices, dtype=np.uint32),
+        ))
+
+        material_id = self.add_material(Material.lambertian((0.5, 0.5, 0.5)))
+
+        return self.add_instance(Instance(mesh_id, material_id, Transform.identity()))
 
 
 
