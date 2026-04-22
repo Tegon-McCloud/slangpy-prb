@@ -18,19 +18,7 @@ public struct InstanceDesc {
     public uint material_index;
 }
 
-public struct PerspectiveCamera {
-    public float3 forward;
-    public float3 horizontal;
-    public float3 vertical;
-    public float3 position;
-
-    public Ray getRay(float2 uv) {
-        return Ray(
-            position,
-            normalize(forward + (2.0 * uv.x - 1.0) * horizontal + (1.0 - 2.0 * uv.y) * vertical),
-        );
-    }
-}
+extern public struct Camera : ICamera;
 
 public struct Meshes {
     public StructuredBuffer<float3> positions;
@@ -64,8 +52,8 @@ public struct LightSample {
 
 public struct Scene {
     public RaytracingAccelerationStructure tlas;
-    
-    public PerspectiveCamera camera;
+
+    public Camera camera;
     public Meshes meshes;
     public StructuredBuffer<Texture2D.Handle> textures;
     public Materials materials;
@@ -115,7 +103,7 @@ public struct Scene {
 
         TraceRay(
             tlas,
-            0,
+            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
             0xff,
             1, /* RayContributionToHitGroupIndex */
             0, /* MultiplierForGeometryContributionHitGroupIndex */

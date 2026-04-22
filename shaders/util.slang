@@ -14,6 +14,10 @@ public struct Ray {
     public float3 direction;
 }
 
+public interface ICamera {
+    public Ray getRay(float2 uv);
+}
+
 public struct HitDesc {
     public float distance;
     public float2 uv;
@@ -55,9 +59,20 @@ public float3x3 make_tbn_matrix(float3 normal) {
     ));
 }
 
+public uint2 dimensions(Texture2D<float4> texture) {
+    uint2 dim;
+    texture.GetDimensions(dim.x, dim.y);
+    return dim;
+}
+
+public uint2 dimensions(Texture2D.Handle texture) {
+    uint2 dim;
+    texture.GetDimensions(dim.x, dim.y);
+    return dim;
+}
+
 public int2 uv_to_texel(Texture2D.Handle texture, float2 uv) {
-    uint2 size;
-    texture.GetDimensions(size.x, size.y);
+    uint2 size = dimensions(texture);
     int2 pos = int2(float2(size) * uv);
     pos = clamp(pos, int2(0), size);
 

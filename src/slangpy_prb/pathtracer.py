@@ -38,7 +38,7 @@ class PathTracer:
             program=program,
             hit_groups=[
                 spy.HitGroupDesc(hit_group_name="triangle_primary", closest_hit_entry_point="closest_hit_triangle_primary"),
-                spy.HitGroupDesc(hit_group_name="triangle_occlusion", any_hit_entry_point="any_hit_triangle_occlusion")
+                spy.HitGroupDesc(hit_group_name="triangle_occlusion", closest_hit_entry_point="closest_hit_triangle_occlusion")
             ],
             max_recursion=2,
             max_ray_payload_size=64,
@@ -55,22 +55,13 @@ class PathTracer:
     def render(
         self,
         scene: Scene,
-        width: int,
-        height: int,
+        render_target: spy.Texture,
         sample_count: int,
         seed: int | None = None,
-    ) -> spy.Texture:
+    ):
         
         if seed != None:
             random.seed(seed)
-
-        render_target = self.device.create_texture(
-            format=spy.Format.rgba32_float,
-            width=width,
-            height=height,
-            usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
-            label="render_target",
-        )
 
         for sample_index in tqdm(range(sample_count)):
             command_encoder = self.device.create_command_encoder()
@@ -85,7 +76,6 @@ class PathTracer:
             submit_id = self.device.submit_command_buffer(command_encoder.finish())
             self.device.wait_for_submit(submit_id)
 
-        return render_target
 
 
     def sample(

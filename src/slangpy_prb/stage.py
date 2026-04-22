@@ -11,7 +11,7 @@ import pygltflib
 from pygltflib import GLTF2
 
 from . import VariableId, TextureId, MeshId, MaterialId, InstanceId, \
-    Transform, PerspectiveCamera, Mesh, Texture, Material
+    Transform, Camera, PerspectiveCamera, Mesh, Texture, Material
 
 @dataclass
 class Variable:
@@ -75,10 +75,9 @@ class Stage:
         self.meshes: list[Mesh] = []
         self.materials: list[Material] = []
         self.instances: list[Instance] = []
-        self.camera = PerspectiveCamera()
+        self.camera: Camera = PerspectiveCamera()
         self.point_light: PointLight = PointLight(spy.float3(0.0), spy.float3(0.0))
         self.environment: TextureId | None = None
-
 
     def add_variable(self, variable: Variable) -> VariableId:
         variable_id = VariableId(len(self.variables))

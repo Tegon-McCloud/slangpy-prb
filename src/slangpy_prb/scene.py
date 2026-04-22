@@ -338,7 +338,10 @@ class Scene:
         super().__init__()
         self.device = device
         self.stage = stage
+        self.camera = self.stage.camera
+
         shader_table_builder.add_module(self.device.load_module("shaders/environment.slang"))
+        shader_table_builder.add_module(self.device.load_module(self.camera.module_name))
 
         self.textures: list[spy.Texture] = []
         self.texture_views: list[spy.TextureView] = []
@@ -411,7 +414,7 @@ class Scene:
         )
 
         self.tlas = Scene._build_tlas(self.device, self.meshes, stage.instances)
-        self.camera = stage.camera
+        
 
     @staticmethod
     def _build_tlas(device: spy.Device, meshes: MeshList, instances: list[Instance]) -> spy.AccelerationStructure:

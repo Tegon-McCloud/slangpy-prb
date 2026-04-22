@@ -8,16 +8,13 @@
 //
 //=================================================================================================
 
-struct Tonemapper {
-    Texture2D<float4> input;
-    RWTexture2D<float4> output;
+implementing postprocess;
 
-    void apply_aces_fit(uint2 pixel) {
-        float4 color = input[pixel];
-        color.rgb = aces_fit(color.rgb);
-        output[pixel] = color;
+public struct Tonemapper : IPostProcessStage {
+    [Differentiable]
+    public float3 apply(float3 color) {
+        return aces_fit(color);
     }
-
 }
 
 // sRGB => XYZ => D65_2_D60 => AP1 => RRT_SAT
@@ -36,6 +33,7 @@ static const float3x3 output_transform =
     {-0.00327, -0.07276,  1.07602}
 };
 
+[Differentiable]
 float3 rrt_odt_fit(float3 v)
 {
     float3 a = v * (v + 0.0245786) - 0.000090537;
@@ -43,6 +41,7 @@ float3 rrt_odt_fit(float3 v)
     return a / b;
 }
 
+[Differentiable]
 float3 aces_fit(float3 color)
 {
     color = mul(input_transform, color);
@@ -52,12 +51,3 @@ float3 aces_fit(float3 color)
 
     return color;
 }
-
-ParameterBlock<Tonemapper> tonemapper;
-
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void main(uint3 tid: SV_DispatchThreadID) {
-    tonemapper.apply_aces_fit(tid.xy);
-}
-

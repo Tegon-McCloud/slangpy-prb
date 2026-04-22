@@ -1,23 +1,17 @@
 import util;
 
-Texture2D<float4> primal;
 Texture2D<float4> reference;
-RWStructuredBuffer<Atomic<float>> out;
-
-const float scale;
-
-uint2 dimensions() {
-    uint2 dim;
-    reference.GetDimensions(dim.x, dim.y);
-    return dim;
-}
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void main(uint3 tid: SV_DispatchThreadID) {
+void loss(
+    uint3 tid: SV_DispatchThreadID,
+    uniform Texture2D<float4> primal,
+    uniform RWStructuredBuffer<Atomic<float>> output,
+) {
     uint2 pixel = tid.xy;
 
-    uint2 dim = dimensions();
+    uint2 dim = dimensions(reference);
     if (pixel.x >= dim.x || pixel.y >= dim.y) {
         return;
     }
@@ -29,8 +23,29 @@ void main(uint3 tid: SV_DispatchThreadID) {
     float l_wave = WaveActiveSum(l);
 
     if (WaveIsFirstLane()) {
-        out[0] += l_wave;
+        output[0] += l_wave;
     }
 }
 
+[shader("compute")]
+[numthreads(16, 16, 1)]
+void backwards(
+    uint3 tid: SV_DispatchThreadID,
+    uniform Texture2D<float4> primal,
+    uniform RWTexture2D<float4> gradient,
+    uniform float scale,
+) {
+    uint2 pixel = tid.xy;
+
+    uint2 dim = dimensions(primal);
+    if (pixel.x >= dim.x || pixel.y >= dim.y) {
+        return;
+    }
+
+    float3 p = primal[pixel].rgb;
+    float3 r = reference[pixel].rgb;
+    float3 g = scale * (p - r);
+
+    gradient[pixel] = float4(g, 1.0);
+}
 

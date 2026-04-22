@@ -114,47 +114,6 @@ void ray_gen()
 
     float3 sample = sample_path(camera_ray, rand_state);
 
-    // float3 sample = float3(0.0);
-
-    // RayTraceResponse response = scene.trace_ray(camera_ray, 1e-, 1e10);
-    // if (response.isHit) {
-
-    //     HitDesc hit = response.hit;
-    //     float3 position = camera_ray.origin + hit.distance * camera_ray.direction;
-    //     MaterialDesc material_desc = scene.materials.descs[hit.material_index];
-
-    //     float3x3 world_to_tangent = transpose(hit.tangent_to_world);
-    //     float3 wo = mul(world_to_tangent, -camera_ray.direction);
-
-    //     LightSample light_sample = scene.sample_light(position, rand_state);
-
-    //     MaterialCallData material_call_data;
-
-    //     material_call_data.wo = wo;
-    //     material_call_data.uv = hit.uv;
-    //     material_call_data.ior_outside = 1.0;
-    //     material_call_data.constants_start_index = material_desc.constants_start_index;
-    //     material_call_data.rand_state = rand_state;
-    //     material_call_data.flags = MaterialCallData.EVALUATE_FLAG | MaterialCallData.SAMPLE_FLAG;
-        
-    //     material_call_data.evaluation.wi = mul(world_to_tangent, light_sample.wi_world);
-        
-    //     CallShader(material_desc.call_index, material_call_data);
-    //     rand_state = material_call_data.rand_state;
-
-    //     if (any(material_call_data.evaluation.value != float3(0.0))) {
-    //         bool occluded = scene.trace_occlusion_ray(
-    //             Ray(position, light_sample.wi_world),
-    //             1e-3,
-    //             light_sample.distance,
-    //         );
-
-    //         if (!occluded) {
-    //             sample = 1.0;
-    //         }
-    //     }
-    // }
-
     if (!all(isfinite(sample))) {
         sample = float3(0.0);
     }
