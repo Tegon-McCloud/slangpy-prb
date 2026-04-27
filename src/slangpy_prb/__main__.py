@@ -1,4 +1,5 @@
 import pathlib
+import random
 from typing import Any, cast
 
 import numpy as np
@@ -409,13 +410,12 @@ def hco_bust_scene(device: spy.Device):
         data=reference_photo,
     )
 
-    device.wait_for_idle()
-
-    save_img(reference.to_numpy(), pathlib.Path("./output/reference.png"))
+    save_img(reference.to_numpy(), pathlib.Path("./output/hco_bust/reference.png"))
 
     stage = Stage()
 
-    bust_id = stage.load_obj("./assets/PhotoRender_data/hc_orsted.obj")
+    stage.load_gltf("./assets/PhotoRender_data/hc_orsted.glb")
+    bust_id = InstanceId(0)
     ground_id = stage.load_obj("./assets/PhotoRender_data/hco_ground.obj")
 
     roughness = stage.add_variable(Variable(0.1, range=(0.0, 1.0)))
@@ -470,24 +470,26 @@ def hco_bust_scene(device: spy.Device):
         ],
     )
 
-    loss_over_roughness(
-        device,
-        reference,
-        stage,
-        roughness,
-        np.linspace(0.25, 1.0, num=100, endpoint=True, dtype=np.float32),
-        # np.array([0.5], dtype=np.float32),
-        post_processor,
-        pathlib.Path("output/hco_bust"),
-    )
+    random.seed(1234)
 
-    # optimize(
+    # loss_over_roughness(
     #     device,
     #     reference,
     #     stage,
-    #     post_processing,
-    #     pathlib.Path("output/hco_bust")
+    #     roughness,
+    #     np.linspace(0.25, 1.0, num=100, endpoint=True, dtype=np.float32),
+    #     # np.array([0.5], dtype=np.float32),
+    #     post_processor,
+    #     pathlib.Path("output/hco_bust"),
     # )
+
+    optimize(
+        device,
+        reference,
+        stage,
+        post_processor,
+        pathlib.Path("output/hco_bust")
+    )
 
 def main():
 

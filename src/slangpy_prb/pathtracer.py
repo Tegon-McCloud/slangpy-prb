@@ -38,7 +38,7 @@ class PathTracer:
             program=program,
             hit_groups=[
                 spy.HitGroupDesc(hit_group_name="triangle_primary", closest_hit_entry_point="closest_hit_triangle_primary"),
-                spy.HitGroupDesc(hit_group_name="triangle_occlusion", closest_hit_entry_point="closest_hit_triangle_occlusion")
+                spy.HitGroupDesc(hit_group_name="triangle_occlusion", closest_hit_entry_point="closest_hit_triangle_occlusion"),
             ],
             max_recursion=2,
             max_ray_payload_size=64,

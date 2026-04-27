@@ -99,7 +99,7 @@ public struct Scene {
         ray_desc.TMin = tmin;
         ray_desc.TMax = tmax;
 
-        bool occluded = false;
+        RayTraceResponse response;
 
         TraceRay(
             tlas,
@@ -109,10 +109,10 @@ public struct Scene {
             0, /* MultiplierForGeometryContributionHitGroupIndex */
             1, /* MissShaderIndex */
             ray_desc,
-            occluded,
+            response,
         );
 
-        return occluded;
+        return response.isHit;
     }
 
 

@@ -44,7 +44,7 @@ float3 sample_path(Ray ray, inout uint rand_state) {
     for (int i = 0; i < max_depth; i++) {
 
         RayTraceResponse response = scene.trace_ray(ray, 1e-3, 1e10);
-        
+
         if (!response.isHit) {
             radiance += throughput * response.miss.radiance;
             break;

@@ -127,8 +127,6 @@ void sample_path_adjoint(Ray ray, float3 radiance, float3 adjoint_radiance, inou
                     CallShader(material_desc.backpropagate_call_index, b);
                 }
             }
-
-
         }
 
         BsdfSample sample = material_call_data.sample;
@@ -145,7 +143,7 @@ void sample_path_adjoint(Ray ray, float3 radiance, float3 adjoint_radiance, inou
             b.wo = wo;
             b.wi = sample.wi;
             b.weight = adjoint_radiance * radiance / sample.value;
-            
+
             CallShader(material_desc.backpropagate_call_index, b);
         }
 
@@ -184,6 +182,7 @@ void ray_gen()
     camera_ray = scene.camera.getRay(uv);
 
     uint adjoint_depth;
+    float3 adjoint_test;
     sample_path_adjoint(camera_ray, radiance, adjoint_radiance, rand_state, adjoint_depth);
 
     if (primary_depth != adjoint_depth) {

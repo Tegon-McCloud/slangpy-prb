@@ -39,8 +39,7 @@ void closest_hit_triangle_primary(inout RayTraceResponse response, BuiltInTriang
     response.hit = hit;
 }
 
-
 [shader("closesthit")]
-void closest_hit_triangle_occlusion(inout bool occluded) {
-    occluded = true;
+void closest_hit_triangle_occlusion(inout RayTraceResponse response) {
+    response.isHit = true;
 }

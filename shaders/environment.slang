@@ -16,5 +16,7 @@ void miss_primary(inout RayTraceResponse response)
 }
 
 [shader("miss")]
-void miss_occlusion()
-{}
+void miss_occlusion(inout RayTraceResponse response)
+{
+    response.isHit = false;
+}

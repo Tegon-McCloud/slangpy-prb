@@ -35,6 +35,12 @@ public struct RayTraceResponse {
     public MissDesc miss;
 }
 
+public struct OcclusionRayTraceResponse {
+    public bool isHit;
+    public HitDesc hit;
+    public MissDesc miss;
+}
+
 [ForceInline]
 [Differentiable]
 public float sq(float x) {
