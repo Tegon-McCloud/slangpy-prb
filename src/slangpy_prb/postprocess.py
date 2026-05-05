@@ -161,8 +161,9 @@ class Tonemapper(PostProcessStage):
 
 
 class SrgbEncoder(PostProcessStage):
-    def __init__(self):
+    def __init__(self, gamma: float):
         super().__init__("SrgbEncoder")
+        self.gamma = gamma
 
     def bind(self, cursor: spy.ShaderCursor): 
-        pass
+        cursor.inv_gamma = 1.0 / self.gamma

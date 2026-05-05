@@ -6,5 +6,6 @@ __include postprocess.srgb;
 
 public interface IPostProcessStage {
     [Differentiable]
+    [NoDiffThis]
     public float3 apply(float3 color);
 }

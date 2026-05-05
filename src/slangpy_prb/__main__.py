@@ -349,7 +349,7 @@ def textured_sphere_scene(device: spy.Device):
         device,
         stages=[
             Tonemapper(),
-            SrgbEncoder(),
+            SrgbEncoder(gamma=2.4),
         ]
     )
 
@@ -394,6 +394,7 @@ def textured_sphere_scene(device: spy.Device):
 
 def hco_bust_scene(device: spy.Device):
     reference_photo = iio.imread("./assets/PhotoRender_data/hco_reference.png").astype(np.float32) / 255.0
+    reference_photo = (reference_photo**2.2) / 2.0
 
     width = reference_photo.shape[1]
     height = reference_photo.shape[0]
@@ -456,40 +457,46 @@ def hco_bust_scene(device: spy.Device):
     )
 
     environment_image = np.full(shape=(1, 1, 3), fill_value=0.001137, dtype=np.float32)
+    # environment_image = np.full(shape=(1, 1, 3), fill_value=0.2, dtype=np.float32)
     stage.environment = stage.add_texture(Texture(environment_image))
 
     stage.point_light = PointLight(
         position=spy.float3(-0.15290257842979774, 0.0010295320183712445, 0.827301670159169),
         intensity=spy.float3(0.28),    
     )
+    # stage.point_light = PointLight(
+    #     position=spy.float3(-0.15290257842979774, 0.0010295320183712445, 0.827301670159169),
+    #     intensity=spy.float3(0.0),    
+    # )
 
     post_processor = PostProcessor(
         device,
         stages=[
-            SrgbEncoder(),
+            # Exposure(stops=1.0),
+            # SrgbEncoder(gamma=2.2),
         ],
     )
 
     random.seed(1234)
 
-    # loss_over_roughness(
-    #     device,
-    #     reference,
-    #     stage,
-    #     roughness,
-    #     np.linspace(0.25, 1.0, num=100, endpoint=True, dtype=np.float32),
-    #     # np.array([0.5], dtype=np.float32),
-    #     post_processor,
-    #     pathlib.Path("output/hco_bust"),
-    # )
-
-    optimize(
+    loss_over_roughness(
         device,
         reference,
         stage,
+        roughness,
+        np.linspace(0.45, 1.0, num=100, endpoint=True, dtype=np.float32),
+        # np.array([0.5], dtype=np.float32),
         post_processor,
-        pathlib.Path("output/hco_bust")
+        pathlib.Path("output/hco_bust"),
     )
+
+    # optimize(
+    #     device,
+    #     reference,
+    #     stage,
+    #     post_processor,
+    #     pathlib.Path("output/hco_bust")
+    # )
 
 def main():
 
