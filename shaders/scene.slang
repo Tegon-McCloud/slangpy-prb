@@ -39,6 +39,7 @@ public struct PointLight {
 }
 
 public struct Lights {
+
     public PointLight point_light;
     public uint environment_texture_index;
 }
@@ -48,6 +49,13 @@ public struct LightSample {
     public float distance;
     public float3 radiance;
     public float pdf;
+}
+
+public struct SceneParameters {
+    public StructuredBuffer<uint8_t> values;
+    public StructuredBuffer<uint8_t> value_gradients;
+    public StructuredBuffer<Texture2D<float4>.Handle> textures;
+    public StructuredBuffer<RWStructuredBuffer<Atomic<float>>.Handle> texture_gradients;
 }
 
 public struct Scene {

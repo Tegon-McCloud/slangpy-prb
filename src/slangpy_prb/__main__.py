@@ -139,22 +139,19 @@ def optimize(
 
 def loss_over_roughness(
     device: spy.Device,
-    reference: spy.Texture,
+    width: int,
+    height: int,
     stage: Stage,
+    post_processor: PostProcessor,
+    loss: Loss,
+    output_dir: pathlib.Path,
     variable: VariableId,
     values: npt.NDArray,
-    post_processor: PostProcessor,
-    output_dir: pathlib.Path,
 ): 
-    width = reference.width
-    height = reference.height
-
     shader_table_builder = ShaderTableBuilder()
     scene = Scene(device, stage, shader_table_builder)
     path_tracer = PathTracer(device, shader_table_builder)
     backpropagater = ReplayBackpropagater(device, shader_table_builder)
-
-    loss = L2Loss(device, reference)
 
     raw_primal = device.create_texture(
         format=spy.Format.rgba32_float,
@@ -213,8 +210,6 @@ def loss_over_roughness(
             sample_count=1 << 10,
         )
 
-        losses[i] = loss.loss(primal)
-
         command_encoder = device.create_command_encoder()
         post_processor.apply(command_encoder, raw_primal, primal)
         loss.backwards(command_encoder, primal, loss_gradient)
@@ -222,6 +217,8 @@ def loss_over_roughness(
         scene.zero_grad(command_encoder)
         device.submit_command_buffer(command_encoder.finish())
         
+        losses[i] = loss.loss(primal)
+
         backpropagater.backpropagate(
             scene,
             adjoint,
@@ -301,13 +298,59 @@ def loss_over_roughness(
 
 #     fig.savefig("output/bsdf_samples.pdf")
 
-def add_xyzrgb_dragon_scene(stage: Stage, width: int, height: int):
-    stage.load_gltf("./assets/XYZRGBDragon.glb")
+def xyzrgb_dragon_scene(device: spy.Device):
 
+    output_dir = pathlib.Path("output/xyzrgb_dragon")
+
+    stage = Stage()
+    stage.load_gltf("./assets/XYZRGBDragon.glb")
+    stage.replace_material(
+        MaterialId(0),
+        Metals.copper(roughness=0.4),
+    )
     environment_image = iio.imread("assets/kloppenheim_06_puresky_4k.hdr")
     stage.environment = stage.add_texture(Texture(environment_image))
 
-def add_lantern_scene(stage: Stage, width: int, height: int):
+    shader_table_builder = ShaderTableBuilder()
+    scene = Scene(device, stage, shader_table_builder)
+    path_tracer = PathTracer(device, shader_table_builder)
+    reference = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        format=spy.Format.rgba32_float,
+        width=960,
+        height=540,
+        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
+        label="reference",
+    )
+    path_tracer.render(scene, reference, sample_count=1<<10, seed=1234)
+    save_img(reference.to_numpy(), filename=output_dir / "reference.png")
+
+    roughness = stage.add_variable(Variable(0.4, range=(0.0, 1.0)))
+
+    stage.replace_material(
+        MaterialId(0),
+        Metals.copper(roughness),
+    )
+
+    post_processor = PostProcessor(device, [])
+    loss = L2Loss(device, reference)
+
+    loss_over_roughness(
+        device,
+        reference.width,
+        reference.height,
+        stage,
+        post_processor,
+        loss,
+        output_dir,
+        roughness,
+        values=np.linspace(0.01, 1.0, num=100, endpoint=True, dtype=np.float32),
+        # values=np.array([0.8], dtype=np.float32),
+    )
+
+
+
+def lantern_scene(stage: Stage, width: int, height: int):
     stage.load_gltf("./assets/Lantern.glb")
 
     environment_image = iio.imread("assets/kloppenheim_06_puresky_4k.hdr")
@@ -477,17 +520,21 @@ def hco_bust_scene(device: spy.Device):
         ],
     )
 
+    loss = L1Loss(device, reference)
+
     random.seed(1234)
 
     loss_over_roughness(
         device,
-        reference,
+        reference.width,
+        reference.height,
         stage,
-        roughness,
-        np.linspace(0.45, 1.0, num=100, endpoint=True, dtype=np.float32),
-        # np.array([0.5], dtype=np.float32),
         post_processor,
+        loss,
         pathlib.Path("output/hco_bust"),
+        roughness,
+        np.linspace(0.1, 1.0, num=100, endpoint=True, dtype=np.float32),
+        # np.array([0.5], dtype=np.float32),
     )
 
     # optimize(
@@ -507,6 +554,7 @@ def main():
         type=spy.DeviceType.vulkan,
     )
 
+    # xyzrgb_dragon_scene(device)
     hco_bust_scene(device)
     # textured_sphere_scene(device)
 

@@ -65,19 +65,19 @@ public float3x3 make_tbn_matrix(float3 normal) {
     ));
 }
 
-public uint2 dimensions(Texture2D<float4> texture) {
+public uint2 dimensions<let n : int>(Texture2D<vector<float, n>> texture) {
     uint2 dim;
     texture.GetDimensions(dim.x, dim.y);
     return dim;
 }
 
-public uint2 dimensions(Texture2D.Handle texture) {
+public uint2 dimensions<let n : int>(Texture2D<vector<float, n>>.Handle texture) {
     uint2 dim;
     texture.GetDimensions(dim.x, dim.y);
     return dim;
 }
 
-public int2 uv_to_texel(Texture2D.Handle texture, float2 uv) {
+public int2 uv_to_texel<let n : int>(Texture2D<vector<float, n>>.Handle texture, float2 uv) {
     uint2 size = dimensions(texture);
     int2 pos = int2(float2(size) * uv);
     pos = clamp(pos, int2(0), size);
@@ -85,7 +85,24 @@ public int2 uv_to_texel(Texture2D.Handle texture, float2 uv) {
     return pos;
 }
 
-public float4 load_from_uv(Texture2D.Handle texture, float2 uv) {
+public vector<float, n> load_from_uv<let n : int>(Texture2D<vector<float, n>>.Handle texture, float2 uv) {
     int2 texel = uv_to_texel(texture, uv);
     return texture.Load(int3(texel, 0));
+}
+
+public void gradient_add_at_uv<let n : int>(
+    Texture2D<vector<float, n>>.Handle texture,
+    RWStructuredBuffer<Atomic<float>>.Handle gradient,
+    float2 uv,
+    vector<float, n> value,
+) {
+    uint2 size = dimensions(texture);
+    int2 pos = int2(float2(size) * uv);
+    pos = clamp(pos, int2(0), size);
+
+    int index = pos.x + size.x * pos.y;
+
+    for (int i = 0; i < n; i++) {
+        gradient[n * index + i] += value[i];
+    }
 }

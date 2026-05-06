@@ -9,7 +9,7 @@ from .stage import Variable, Instance, PointLight, Stage
 from .scene import ShaderTableBuilder, Scene, SceneShape, SceneVariables
 from .pathtracer import PathTracer
 from .replay_backpropagater import ReplayBackpropagater
-from .loss import L2Loss
+from .loss import Loss, L2Loss, L1Loss
 from .optimizer import Optimizer, GradientDescent, Adam
 from .postprocess import PostProcessor, PostProcessStage, Exposure, Tonemapper, SrgbEncoder
 
