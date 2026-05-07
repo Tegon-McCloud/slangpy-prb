@@ -1,12 +1,12 @@
 implementing postprocess;
 
-public struct Exposure : IPostProcessStage {
+public struct Gamma : IPostProcessStage {
 
-    float scale;
+    float inv_gamma;
 
     [Differentiable]
     [NoDiffThis]
     public float3 apply(float3 color) {
-        return scale * color;
+        return pow(max(color, 0.0), inv_gamma);
     }
 }

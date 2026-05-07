@@ -219,6 +219,8 @@ def loss_over_roughness(
         
         losses[i] = loss.loss(primal)
 
+        tqdm.write(f"losses[{i}]: {losses[i]}")
+
         backpropagater.backpropagate(
             scene,
             adjoint,
@@ -392,7 +394,7 @@ def textured_sphere_scene(device: spy.Device):
         device,
         stages=[
             Tonemapper(),
-            SrgbEncoder(gamma=2.4),
+            SrgbEncoder(),
         ]
     )
 
@@ -437,7 +439,7 @@ def textured_sphere_scene(device: spy.Device):
 
 def hco_bust_scene(device: spy.Device):
     reference_photo = iio.imread("./assets/PhotoRender_data/hco_reference.png").astype(np.float32) / 255.0
-    reference_photo = (reference_photo**2.2) / 2.0
+    # reference_photo = (reference_photo**2.2) / 2.0
 
     width = reference_photo.shape[1]
     height = reference_photo.shape[0]
@@ -515,8 +517,8 @@ def hco_bust_scene(device: spy.Device):
     post_processor = PostProcessor(
         device,
         stages=[
-            # Exposure(stops=1.0),
-            # SrgbEncoder(gamma=2.2),
+            Exposure(stops=1.0),
+            Gamma(gamma=2.2),
         ],
     )
 
@@ -524,26 +526,26 @@ def hco_bust_scene(device: spy.Device):
 
     random.seed(1234)
 
-    loss_over_roughness(
-        device,
-        reference.width,
-        reference.height,
-        stage,
-        post_processor,
-        loss,
-        pathlib.Path("output/hco_bust"),
-        roughness,
-        np.linspace(0.1, 1.0, num=100, endpoint=True, dtype=np.float32),
-        # np.array([0.5], dtype=np.float32),
-    )
-
-    # optimize(
+    # loss_over_roughness(
     #     device,
-    #     reference,
+    #     reference.width,
+    #     reference.height,
     #     stage,
     #     post_processor,
-    #     pathlib.Path("output/hco_bust")
+    #     loss,
+    #     pathlib.Path("output/hco_bust"),
+    #     roughness,
+    #     np.linspace(0.1, 1.0, num=100, endpoint=True, dtype=np.float32),
+    #     # np.array([0.5], dtype=np.float32),
     # )
+
+    optimize(
+        device,
+        reference,
+        stage,
+        post_processor,
+        pathlib.Path("output/hco_bust")
+    )
 
 def main():
 
@@ -555,8 +557,8 @@ def main():
     )
 
     # xyzrgb_dragon_scene(device)
-    hco_bust_scene(device)
     # textured_sphere_scene(device)
+    hco_bust_scene(device)
 
 
 if __name__ == "__main__":
